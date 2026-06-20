@@ -68,8 +68,13 @@ pub async fn simulate_transaction(rpc_url: &str, raw_tx_base64: &str) -> Result<
         ),
     };
 
-    let response =
-        client.post(rpc_url).json(&request).send().await.context("Failed to send simulateTransaction RPC request")?;
+    let response = client
+        .post(rpc_url)
+        .json(&request)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("Failed to send simulateTransaction RPC request")?;
 
     let body: RpcSimulateResponse =
         response.json().await.context("Failed to parse simulateTransaction RPC response")?;
@@ -268,8 +273,13 @@ async fn check_program_owner(rpc_url: &str, program_id: &str) -> Result<ProgramO
         ),
     };
 
-    let response =
-        client.post(rpc_url).json(&request).send().await.context("Failed to send getAccountInfo RPC request")?;
+    let response = client
+        .post(rpc_url)
+        .json(&request)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("Failed to send getAccountInfo RPC request")?;
 
     let body: GetAccountInfoResponse = response.json().await.context("Failed to parse getAccountInfo RPC response")?;
 

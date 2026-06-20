@@ -103,7 +103,7 @@ fn validate_pda_seeds_tier1(idl: &IdlJson, flags: &mut Vec<RiskFlag>) {
 
 // ── Tier 2: Runtime PDA Seed Verification (requires tx + IDL) ─────────────────
 
-fn validate_pda_seeds_tier2(report: &TransactionReport, idl: &IdlJson, flags: &mut Vec<RiskFlag>) {
+fn validate_pda_seeds_tier2(report: &mut TransactionReport, idl: &IdlJson, flags: &mut Vec<RiskFlag>) {
     use solana_sdk::pubkey::Pubkey;
     use std::str::FromStr;
 
@@ -140,7 +140,14 @@ fn validate_pda_seeds_tier2(report: &TransactionReport, idl: &IdlJson, flags: &m
             };
 
             match try_find_pda(pda, report, decoded_ix, &program_id) {
-                Ok(expected_pubkey) => {
+                Ok((expected_pubkey, bump)) => {
+                    if let Some(account) = report.accounts.get_mut(mapped.account_index as usize) {
+                        account.pda_info = Some(crate::types::PdaInfo {
+                            seeds_declared: describe_seeds_vec(pda),
+                            bump: Some(bump),
+                            expected_address: Some(expected_pubkey.to_string()),
+                        });
+                    }
                     if expected_pubkey != actual_pubkey {
                         flags.push(RiskFlag {
                             severity: RiskSeverity::Critical,
@@ -182,7 +189,7 @@ fn try_find_pda(
     report: &TransactionReport,
     ix: &crate::types::DecodedInstruction,
     program_id: &solana_sdk::pubkey::Pubkey,
-) -> Result<solana_sdk::pubkey::Pubkey, String> {
+) -> Result<(solana_sdk::pubkey::Pubkey, u8), String> {
     use solana_sdk::pubkey::Pubkey;
 
     let mut seed_bytes: Vec<Vec<u8>> = Vec::new();
@@ -214,8 +221,8 @@ fn try_find_pda(
     }
 
     let seed_slices: Vec<&[u8]> = seed_bytes.iter().map(|v| v.as_slice()).collect();
-    let (pk, _bump) = Pubkey::find_program_address(&seed_slices, program_id);
-    Ok(pk)
+    let (pk, bump) = Pubkey::find_program_address(&seed_slices, program_id);
+    Ok((pk, bump))
 }
 
 fn resolve_account_path(
@@ -244,6 +251,10 @@ fn resolve_account_path(
 }
 
 fn describe_seeds(pda: &IdlPda) -> String {
+    describe_seeds_vec(pda).join(", ")
+}
+
+fn describe_seeds_vec(pda: &IdlPda) -> Vec<String> {
     pda.seeds
         .iter()
         .map(|s| match s.kind.as_str() {
@@ -255,8 +266,7 @@ fn describe_seeds(pda: &IdlPda) -> String {
             "arg" => format!("arg({})", s.path.as_deref().unwrap_or("?")),
             other => format!("{}(?)", other),
         })
-        .collect::<Vec<_>>()
-        .join(", ")
+        .collect()
 }
 
 // ── Missing Signer Check ─────────────────────────────────────────────────────
@@ -400,6 +410,22 @@ fn validate_compute_budget(report: &TransactionReport, flags: &mut Vec<RiskFlag>
                 });
             }
         }
+    }
+
+    for &ix_idx in &cb.high_cu_instructions {
+        flags.push(RiskFlag {
+            severity: RiskSeverity::Warning,
+            category: RiskCategory::HighComputeUnitUsage,
+            instruction_index: Some(ix_idx),
+            message: format!(
+                "High Compute Unit Usage: Instruction #{} estimated CU cost exceeds threshold. \
+                 This may indicate an expensive operation or potential resource exhaustion vector.",
+                ix_idx
+            ),
+            details: "Instructions consuming a disproportionate share of the CU budget should be \
+                      reviewed for necessity and potential optimization or abuse."
+                .to_string(),
+        });
     }
 }
 

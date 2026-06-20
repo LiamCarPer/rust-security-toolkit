@@ -1,4 +1,8 @@
+pub mod anchor_decoder;
 pub mod decoder;
+pub mod encoding;
+pub mod instruction_decoder;
+pub mod internal_parser;
 pub mod simulator;
 pub mod types;
 pub mod ui;

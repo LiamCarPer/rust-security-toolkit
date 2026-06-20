@@ -1,14 +1,9 @@
-mod decoder;
-mod simulator;
-mod types;
-mod ui;
-mod validator;
-
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 
-use crate::types::IdlJson;
+use rust_security_toolkit::types::IdlJson;
+use rust_security_toolkit::{decoder, simulator, types, ui, validator};
 
 #[derive(Parser)]
 #[command(
@@ -86,11 +81,11 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    let raw_bytes = decoder::detect_encoding(&tx_input);
+    let encoding = decoder::detect_encoding(&tx_input);
     let raw_bytes_decoded = {
         use base64::Engine;
         let trimmed = tx_input.trim();
-        match raw_bytes {
+        match encoding {
             types::Encoding::Base58 => bs58::decode(trimmed).into_vec().context("Failed to decode Base58 input")?,
             types::Encoding::Base64 => {
                 base64::engine::general_purpose::STANDARD.decode(trimmed).context("Failed to decode Base64 input")?
@@ -100,7 +95,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    let mut report = decoder::decode_transaction(&tx_input, idl.as_ref())?;
+    let mut report = decoder::decode_raw_bytes(&raw_bytes_decoded, idl.as_ref())?;
     validator::validate(&mut report, idl.as_ref());
 
     if cli.validate_decoding {

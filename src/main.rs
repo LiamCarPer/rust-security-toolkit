@@ -132,6 +132,10 @@ async fn main() -> Result<()> {
                 report.warnings.push(format!("Simulation failed: {}", e));
             }
         }
+
+        // Dynamic program verification: ownership + verified build registry
+        let prog_flags = simulator::verify_programs(rpc_url, &report).await;
+        report.risk_flags.extend(prog_flags);
     }
 
     if let Some(ref output_path) = cli.output_tx_report {

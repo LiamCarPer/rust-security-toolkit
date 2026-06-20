@@ -4,7 +4,7 @@ use solana_sdk::{message::VersionedMessage, pubkey::Pubkey, signature::Signature
 
 use crate::types::{
     ADDRESS_LOOKUP_TABLE_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, AccountInfo, AltResolution,
-    COMPUTE_BUDGET_PROGRAM_ID, ComputeBudgetInfo, DecodedInstruction, Encoding, IdlJson, MappedAccount,
+    COMPUTE_BUDGET_PROGRAM_ID, ComputeBudgetInfo, DecodedInstruction, Encoding, IdlJson, MappedAccount, PdaInfo,
     ResolvedAccount, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, TransactionReport,
 };
 
@@ -167,7 +167,7 @@ pub fn decode_transaction(input: &str, idl: Option<&IdlJson>) -> Result<Transact
         });
     }
 
-    let is_reordered = cb_positions.len() > 1 || cb_positions.first().is_some_and(|&p| p != 0);
+    let is_reordered = cb_positions.iter().any(|&p| p >= cb_positions.len());
 
     if !cb_positions.is_empty() || has_explicit_cu_limit {
         compute_budget_info = Some(ComputeBudgetInfo {
@@ -178,6 +178,11 @@ pub fn decode_transaction(input: &str, idl: Option<&IdlJson>) -> Result<Transact
             is_reordered,
             high_cu_instructions: Vec::new(),
         });
+    }
+
+    // Annotate accounts with PDA information when IDL is provided
+    if let Some(idl) = idl {
+        annotate_pda_accounts(&mut accounts, &instructions, idl);
     }
 
     Ok(TransactionReport {
@@ -194,6 +199,54 @@ pub fn decode_transaction(input: &str, idl: Option<&IdlJson>) -> Result<Transact
         simulation: None,
         warnings: Vec::new(),
     })
+}
+
+/// Annotate account entries with PDA seed declarations from the IDL.
+fn annotate_pda_accounts(accounts: &mut [AccountInfo], instructions: &[DecodedInstruction], idl: &IdlJson) {
+    for ix in instructions {
+        let ix_name = match &ix.instruction_name {
+            Some(name) => name,
+            None => continue,
+        };
+        let idl_ix = match idl.find_instruction(ix_name) {
+            Some(ix) => ix,
+            None => continue,
+        };
+
+        for (acc_idx, idl_account) in idl_ix.accounts.iter().enumerate() {
+            let pda = match &idl_account.pda {
+                Some(pda) => pda,
+                None => continue,
+            };
+
+            let mapped = match ix.accounts.get(acc_idx) {
+                Some(a) => a,
+                None => continue,
+            };
+
+            let seeds: Vec<String> = pda
+                .seeds
+                .iter()
+                .map(|s| match s.kind.as_str() {
+                    "const" => {
+                        let val = s
+                            .value
+                            .as_ref()
+                            .map(|v| String::from_utf8_lossy(v).to_string())
+                            .unwrap_or_else(|| "?".to_string());
+                        format!("\"{}\"", val)
+                    }
+                    "account" => s.path.as_deref().or(s.account.as_deref()).unwrap_or("?").to_string(),
+                    "arg" => format!("arg({})", s.path.as_deref().unwrap_or("?")),
+                    other => format!("{}(?)", other),
+                })
+                .collect();
+
+            if let Some(account) = accounts.get_mut(mapped.account_index as usize) {
+                account.pda_info = Some(PdaInfo { seeds_declared: seeds, bump: None, expected_address: None });
+            }
+        }
+    }
 }
 
 /// Parse ComputeBudget instruction data.

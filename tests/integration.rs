@@ -401,3 +401,162 @@ fn test_is_known_program_id() {
     assert!(is_known_program_id("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"));
     assert!(!is_known_program_id("FakeProgram111111111111111111111111111111"));
 }
+
+// ── Transaction Round-Trip & Fixture Tests ───────────────────────────────────
+
+use solana_sdk::{
+    hash::Hash,
+    instruction::Instruction,
+    message::{VersionedMessage, v0},
+    pubkey::Pubkey,
+    signature::Keypair,
+    signer::Signer,
+    transaction::VersionedTransaction,
+};
+use std::io::Write as _;
+use std::str::FromStr;
+
+fn system_transfer_instruction(from: &Pubkey, to: &Pubkey, lamports: u64) -> Instruction {
+    let mut data = vec![0u8; 12];
+    data[0..4].copy_from_slice(&2u32.to_le_bytes());
+    data[4..12].copy_from_slice(&lamports.to_le_bytes());
+    Instruction {
+        program_id: Pubkey::from_str("11111111111111111111111111111111").unwrap(),
+        accounts: vec![
+            solana_sdk::instruction::AccountMeta::new(*from, true),
+            solana_sdk::instruction::AccountMeta::new(*to, false),
+        ],
+        data,
+    }
+}
+
+fn set_compute_unit_limit_instruction(limit: u32) -> Instruction {
+    let mut data = vec![0u8; 5];
+    data[0] = 1;
+    data[1..5].copy_from_slice(&limit.to_le_bytes());
+    Instruction {
+        program_id: Pubkey::from_str("ComputeBudget111111111111111111111111111111").unwrap(),
+        accounts: vec![],
+        data,
+    }
+}
+
+fn set_compute_unit_price_instruction(price: u64) -> Instruction {
+    let mut data = vec![0u8; 9];
+    data[0] = 3;
+    data[1..9].copy_from_slice(&price.to_le_bytes());
+    Instruction {
+        program_id: Pubkey::from_str("ComputeBudget111111111111111111111111111111").unwrap(),
+        accounts: vec![],
+        data,
+    }
+}
+
+/// Build a legacy System Transfer transaction, serialize it, and verify
+/// the decoder can round-trip it correctly.
+#[test]
+fn test_legacy_transfer_round_trip() {
+    let from = Keypair::new();
+    let to = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
+    let recent_blockhash = Hash::new_from_array([7u8; 32]);
+
+    let ix = system_transfer_instruction(&from.pubkey(), &to, 1_000_000_000);
+
+    let message = VersionedMessage::Legacy(solana_sdk::message::legacy::Message::new_with_blockhash(
+        &[ix],
+        Some(&from.pubkey()),
+        &recent_blockhash,
+    ));
+
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
+
+    let serialized = bincode::serialize(&tx).unwrap();
+    let hex_encoded = hex::encode(&serialized);
+
+    // Write fixture to disk
+    write_fixture("tests/fixtures/system_transfer.hex", &hex_encoded);
+    write_fixture("tests/fixtures/system_transfer.bin", &serialized);
+
+    let base58_encoded = bs58::encode(&serialized).into_string();
+    write_fixture("tests/fixtures/system_transfer.base58", &base58_encoded);
+
+    use base64::Engine;
+    let base64_encoded = base64::engine::general_purpose::STANDARD.encode(&serialized);
+    write_fixture("tests/fixtures/system_transfer.base64", &base64_encoded);
+
+    // Round-trip: decode the hex fixture and verify
+    let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode hex fixture");
+    assert_eq!(report.instructions.len(), 1);
+    assert_eq!(report.instructions[0].program_name, "System Program");
+    assert_eq!(report.instructions[0].instruction_name.as_deref(), Some("Transfer"));
+    assert_eq!(report.instructions[0].data["lamports"], serde_json::json!(1000000000u64));
+}
+
+/// Build a v0 transaction and verify decoder handles the version field.
+#[test]
+fn test_v0_transaction_round_trip() {
+    let from = Keypair::new();
+    let to = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
+    let recent_blockhash = Hash::new_from_array([7u8; 32]);
+
+    let ix = system_transfer_instruction(&from.pubkey(), &to, 500_000_000);
+
+    let v0_msg = v0::Message::try_compile(&from.pubkey(), &[ix], &[], recent_blockhash).unwrap();
+
+    let message = VersionedMessage::V0(v0_msg);
+
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
+
+    let serialized = bincode::serialize(&tx).unwrap();
+    let hex_encoded = hex::encode(&serialized);
+
+    write_fixture("tests/fixtures/v0_transfer.hex", &hex_encoded);
+
+    let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode v0 fixture");
+    assert_eq!(report.message_version, Some(0));
+    assert_eq!(report.instructions.len(), 1);
+    assert_eq!(report.instructions[0].instruction_name.as_deref(), Some("Transfer"));
+}
+
+/// Build a transaction with ComputeBudget + Transfer instruction and verify
+/// compute budget analysis in the report.
+#[test]
+fn test_compute_budget_transaction() {
+    let from = Keypair::new();
+    let to = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
+    let recent_blockhash = Hash::new_from_array([7u8; 32]);
+
+    let cu_limit_ix = set_compute_unit_limit_instruction(150_000);
+    let cu_price_ix = set_compute_unit_price_instruction(5_000);
+    let transfer_ix = system_transfer_instruction(&from.pubkey(), &to, 1_000_000);
+
+    let message = VersionedMessage::Legacy(solana_sdk::message::legacy::Message::new_with_blockhash(
+        &[cu_limit_ix, cu_price_ix, transfer_ix],
+        Some(&from.pubkey()),
+        &recent_blockhash,
+    ));
+
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
+
+    let serialized = bincode::serialize(&tx).unwrap();
+    let hex_encoded = hex::encode(&serialized);
+
+    write_fixture("tests/fixtures/compute_budget_transfer.hex", &hex_encoded);
+
+    let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode CU fixture");
+    assert_eq!(report.instructions.len(), 3);
+
+    let cb = report.compute_budget.expect("Should have compute budget info");
+    assert!(cb.compute_unit_limit_set);
+    assert_eq!(cb.compute_unit_limit, 150_000);
+    assert_eq!(cb.compute_unit_price, 5_000);
+
+    // CU instructions at positions 0 and 1 (both at start = not reordered)
+    assert!(!cb.is_reordered);
+}
+
+fn write_fixture(path: &str, data: impl AsRef<[u8]>) {
+    let data = data.as_ref();
+    let mut file = std::fs::File::create(path).expect("Failed to create fixture file");
+    file.write_all(data).expect("Failed to write fixture");
+}

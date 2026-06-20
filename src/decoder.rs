@@ -178,6 +178,12 @@ pub fn decode_transaction(input: &str, idl: Option<&IdlJson>) -> Result<Transact
             is_reordered,
             high_cu_instructions: Vec::new(),
         });
+
+        // Estimate CU costs and flag high-consumption instructions
+        let high_cu = estimate_high_cu_instructions(&instructions, cu_limit);
+        if let Some(ref mut cb) = compute_budget_info {
+            cb.high_cu_instructions = high_cu;
+        }
     }
 
     // Annotate accounts with PDA information when IDL is provided
@@ -269,6 +275,54 @@ fn parse_compute_budget(data: &[u8]) -> Option<(u32, u64)> {
         _ => {}
     }
     Some((limit, price))
+}
+
+/// Estimate CU cost for an instruction based on program and operation type.
+fn estimate_cu_cost(ix: &DecodedInstruction) -> u32 {
+    match ix.program_name.as_str() {
+        "System Program" => match ix.instruction_name.as_deref() {
+            Some("CreateAccount") | Some("CreateAccountWithSeed") => 15_000,
+            Some("Allocate") | Some("AllocateWithSeed") => 5_000,
+            Some("Assign") | Some("AssignWithSeed") => 2_000,
+            Some("Transfer") => 1_500,
+            _ => 3_000,
+        },
+        "Token Program" | "Token-2022 Program" => match ix.instruction_name.as_deref() {
+            Some("InitializeMint") | Some("InitializeMint2") => 15_000,
+            Some("InitializeAccount") | Some("InitializeAccount2") | Some("InitializeAccount3") => 15_000,
+            Some("InitializeMultisig") | Some("InitializeMultisig2") => 15_000,
+            Some("Transfer") | Some("TransferChecked") => 3_000,
+            Some("MintTo") | Some("MintToChecked") => 3_000,
+            Some("Burn") | Some("BurnChecked") => 3_000,
+            Some("CloseAccount") => 3_000,
+            Some("Approve") | Some("ApproveChecked") => 3_000,
+            Some("SetAuthority") => 3_000,
+            Some("FreezeAccount") | Some("ThawAccount") => 3_000,
+            Some("ConfidentialTransfer") => 25_000,
+            Some("InitializeTransferFeeConfig") => 15_000,
+            _ => 5_000,
+        },
+        "Associated Token Program" => match ix.instruction_name.as_deref() {
+            Some("Create") | Some("CreateIdempotent") => 15_000,
+            _ => 5_000,
+        },
+        "Compute Budget" => 0,
+        "Address Lookup Table" => 5_000,
+        _ => 5_000,
+    }
+}
+
+/// Flag instructions whose estimated CU cost exceeds 20% of the limit
+/// or is above 10,000 CU (whichever is lower).
+fn estimate_high_cu_instructions(instructions: &[DecodedInstruction], cu_limit: u32) -> Vec<u8> {
+    let threshold = (cu_limit / 5).clamp(5000, 10_000);
+    instructions
+        .iter()
+        .filter_map(|ix| {
+            let cost = estimate_cu_cost(ix);
+            if cost >= threshold { Some(ix.index) } else { None }
+        })
+        .collect()
 }
 
 /// Auto-detect the encoding of the input string.
@@ -581,12 +635,127 @@ fn decode_token_instruction(data: &[u8], program_id: &str) -> (Option<String>, s
             let m = payload.first().copied().unwrap_or(0);
             (Some("InitializeMultisig2".to_string()), serde_json::json!({ "m": m }))
         }
-        // Token-2022 extension: ConfidentialTransfer (discriminator 25-31 are extensions)
-        25 if is_token22 => (Some("ConfidentialTransfer".to_string()), serde_json::Value::Null),
+        // Token-2022 extension instructions (discriminators 20+)
+        20 if is_token22 => {
+            // InitializeMint2 is already handled above (shares discriminator 0 path)
+            // but if reached here with empty payload, provide a label
+            (Some("InitializeMint2".to_string()), serde_json::Value::Null)
+        }
+        22 if is_token22 => (Some("InitializeImmutableOwner".to_string()), serde_json::Value::Null),
+        25 if is_token22 => {
+            let mut map = serde_json::Map::new();
+            if payload.len() >= 33 {
+                let close_auth_opt = payload[0];
+                map.insert("close_authority_option".to_string(), serde_json::json!(close_auth_opt));
+                if close_auth_opt == 1
+                    && payload.len() >= 65
+                    && let Ok(auth) = Pubkey::try_from(&payload[1..33])
+                {
+                    map.insert("close_authority".to_string(), serde_json::Value::String(auth.to_string()));
+                }
+            }
+            (Some("InitializeMintCloseAuthority".to_string()), serde_json::Value::Object(map))
+        }
+        26 if is_token22 => decode_transfer_fee_extension(payload),
+        27 if is_token22 => decode_confidential_transfer_extension(payload),
+        31 if is_token22 => {
+            let mut map = serde_json::Map::new();
+            if payload.len() >= 33
+                && let Ok(delegate) = Pubkey::try_from(&payload[0..32])
+            {
+                map.insert("delegate".to_string(), serde_json::Value::String(delegate.to_string()));
+            }
+            (Some("InitializePermanentDelegate".to_string()), serde_json::Value::Object(map))
+        }
+        37 if is_token22 => (Some("ConfidentialTransferFeeExtension".to_string()), serde_json::Value::Null),
         _ => {
             let hex_str = hex::encode(data);
             (None, serde_json::Value::String(hex_str))
         }
+    }
+}
+
+/// Decode TransferFee extension sub-instructions.
+fn decode_transfer_fee_extension(payload: &[u8]) -> (Option<String>, serde_json::Value) {
+    if payload.is_empty() {
+        return (Some("TransferFeeExtension".to_string()), serde_json::Value::Null);
+    }
+    match payload[0] {
+        0 => {
+            let mut map = serde_json::Map::new();
+            if payload.len() >= 33
+                && let Ok(authority) = Pubkey::try_from(&payload[1..33])
+            {
+                map.insert(
+                    "transfer_fee_config_authority".to_string(),
+                    serde_json::Value::String(authority.to_string()),
+                );
+            }
+            if payload.len() >= 65
+                && let Ok(authority) = Pubkey::try_from(&payload[33..65])
+            {
+                map.insert("withdraw_withheld_authority".to_string(), serde_json::Value::String(authority.to_string()));
+            }
+            if payload.len() >= 67 {
+                let fee_bps = u16::from_le_bytes([payload[65], payload[66]]);
+                map.insert("transfer_fee_basis_points".to_string(), serde_json::json!(fee_bps));
+            }
+            if payload.len() >= 75 {
+                let max_fee = u64::from_le_bytes([
+                    payload[67],
+                    payload[68],
+                    payload[69],
+                    payload[70],
+                    payload[71],
+                    payload[72],
+                    payload[73],
+                    payload[74],
+                ]);
+                map.insert("max_fee".to_string(), serde_json::json!(max_fee));
+            }
+            (Some("InitializeTransferFeeConfig".to_string()), serde_json::Value::Object(map))
+        }
+        1 if payload.len() >= 9 => {
+            let amount = u64::from_le_bytes(payload[1..9].try_into().unwrap());
+            (Some("TransferCheckedWithFee".to_string()), serde_json::json!({ "amount": amount }))
+        }
+        2 => (Some("WithdrawWithheldTokensFromMint".to_string()), serde_json::Value::Null),
+        3 => {
+            let num_accounts = payload.get(1).copied().unwrap_or(0);
+            (
+                Some("WithdrawWithheldTokensFromAccounts".to_string()),
+                serde_json::json!({ "num_token_accounts": num_accounts }),
+            )
+        }
+        4 => {
+            let mut map = serde_json::Map::new();
+            if payload.len() >= 2 {
+                map.insert("num_mints".to_string(), serde_json::json!(payload[1]));
+            }
+            (Some("HarvestWithheldTokensToMint".to_string()), serde_json::Value::Object(map))
+        }
+        _ => (Some("TransferFeeExtension".to_string()), serde_json::Value::Null),
+    }
+}
+
+/// Decode ConfidentialTransfer extension sub-instructions.
+fn decode_confidential_transfer_extension(payload: &[u8]) -> (Option<String>, serde_json::Value) {
+    if payload.is_empty() {
+        return (Some("ConfidentialTransferExtension".to_string()), serde_json::Value::Null);
+    }
+    match payload[0] {
+        0 => (Some("InitializeConfidentialTransferMint".to_string()), serde_json::Value::Null),
+        1 => (Some("UpdateConfidentialTransferMint".to_string()), serde_json::Value::Null),
+        2 => (Some("ConfigureConfidentialTransferAccount".to_string()), serde_json::Value::Null),
+        3 => (Some("ApproveConfidentialTransferAccount".to_string()), serde_json::Value::Null),
+        4 => (Some("EmptyConfidentialTransferAccount".to_string()), serde_json::Value::Null),
+        5 => (Some("Deposit".to_string()), serde_json::Value::Null),
+        6 => (Some("Withdraw".to_string()), serde_json::Value::Null),
+        7 => (Some("Transfer".to_string()), serde_json::Value::Null),
+        8 => (Some("ApplyPendingBalance".to_string()), serde_json::Value::Null),
+        9 => (Some("EnableConfidentialTransfer".to_string()), serde_json::Value::Null),
+        10 => (Some("DisableConfidentialTransfer".to_string()), serde_json::Value::Null),
+        _ => (Some("ConfidentialTransferExtension".to_string()), serde_json::Value::Null),
     }
 }
 

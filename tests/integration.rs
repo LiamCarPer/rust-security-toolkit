@@ -548,3 +548,48 @@ fn test_decode_compute_budget_fixture() {
     assert_eq!(cb.compute_unit_price, 5_000);
     assert!(!cb.is_reordered);
 }
+
+fn create_account_instruction(from: &Pubkey, to: &Pubkey, lamports: u64, space: u64, owner: &Pubkey) -> Instruction {
+    let mut data = vec![0u8; 52];
+    data[0..4].copy_from_slice(&0u32.to_le_bytes());
+    data[4..12].copy_from_slice(&lamports.to_le_bytes());
+    data[12..20].copy_from_slice(&space.to_le_bytes());
+    data[20..52].copy_from_slice(&owner.to_bytes());
+    Instruction {
+        program_id: Pubkey::from_str("11111111111111111111111111111111").unwrap(),
+        accounts: vec![
+            solana_sdk::instruction::AccountMeta::new(*from, true),
+            solana_sdk::instruction::AccountMeta::new(*to, true),
+        ],
+        data,
+    }
+}
+
+/// Verify that high-CU instructions (CreateAccount, 15k CU) are flagged
+/// when they exceed the dynamic threshold.
+#[test]
+fn test_high_cu_instruction_detection() {
+    let from = Keypair::new();
+    let to = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
+    let owner = Pubkey::from_str("BPFLoaderUpgradeab1e11111111111111111111111").unwrap();
+    let recent_blockhash = Hash::new_from_array([7u8; 32]);
+
+    // Build a transaction with a CU limit of 30,000 and a CreateAccount (15k CU)
+    let cu_limit_ix = set_compute_unit_limit_instruction(30_000);
+    let create_ix = create_account_instruction(&from.pubkey(), &to, 1_000_000_000, 256, &owner);
+
+    let message = VersionedMessage::Legacy(solana_sdk::message::legacy::Message::new_with_blockhash(
+        &[cu_limit_ix, create_ix],
+        Some(&from.pubkey()),
+        &recent_blockhash,
+    ));
+
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
+    let hex_encoded = hex::encode(&bincode::serialize(&tx).unwrap());
+
+    let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode CU+CreateAccount tx");
+    let cb = report.compute_budget.expect("Should have compute budget info");
+    assert_eq!(cb.compute_unit_limit, 30_000);
+    assert!(!cb.high_cu_instructions.is_empty(), "CreateAccount (15k CU) should be flagged with 30k limit");
+    assert_eq!(cb.high_cu_instructions[0], 1);
+}

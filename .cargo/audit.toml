@@ -1,0 +1,7 @@
+[advisories]
+# bincode 1.x is unmaintained but required by solana-sdk v4 for legacy
+# transaction wire-format compatibility. No alternative is available.
+ignore = [
+    "RUSTSEC-2025-0141", # bincode unmaintained
+    "RUSTSEC-2025-0052", # async-std unmaintained (dev-only via httpmock)
+]

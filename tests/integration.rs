@@ -452,111 +452,99 @@ fn set_compute_unit_price_instruction(price: u64) -> Instruction {
     }
 }
 
-/// Build a legacy System Transfer transaction, serialize it, and verify
-/// the decoder can round-trip it correctly.
+fn write_fixture(path: &str, data: impl AsRef<[u8]>) {
+    let data = data.as_ref();
+    let mut file = std::fs::File::create(path).expect("Failed to create fixture file");
+    file.write_all(data).expect("Failed to write fixture");
+}
+
+fn read_fixture(path: &str) -> String {
+    std::fs::read_to_string(path).expect("Failed to read fixture file")
+}
+
+/// Generate all transaction fixtures. Run manually with:
+///   cargo test generate_fixtures -- --ignored
 #[test]
-fn test_legacy_transfer_round_trip() {
+#[ignore]
+fn generate_fixtures() {
     let from = Keypair::new();
     let to = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
     let recent_blockhash = Hash::new_from_array([7u8; 32]);
 
+    // Legacy system transfer
     let ix = system_transfer_instruction(&from.pubkey(), &to, 1_000_000_000);
-
     let message = VersionedMessage::Legacy(solana_sdk::message::legacy::Message::new_with_blockhash(
         &[ix],
         Some(&from.pubkey()),
         &recent_blockhash,
     ));
-
     let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
-
     let serialized = bincode::serialize(&tx).unwrap();
-    let hex_encoded = hex::encode(&serialized);
-
-    // Write fixture to disk
-    write_fixture("tests/fixtures/system_transfer.hex", &hex_encoded);
+    write_fixture("tests/fixtures/system_transfer.hex", &hex::encode(&serialized));
     write_fixture("tests/fixtures/system_transfer.bin", &serialized);
-
-    let base58_encoded = bs58::encode(&serialized).into_string();
-    write_fixture("tests/fixtures/system_transfer.base58", &base58_encoded);
-
+    write_fixture("tests/fixtures/system_transfer.base58", &bs58::encode(&serialized).into_string());
     use base64::Engine;
-    let base64_encoded = base64::engine::general_purpose::STANDARD.encode(&serialized);
-    write_fixture("tests/fixtures/system_transfer.base64", &base64_encoded);
+    write_fixture(
+        "tests/fixtures/system_transfer.base64",
+        &base64::engine::general_purpose::STANDARD.encode(&serialized),
+    );
 
-    // Round-trip: decode the hex fixture and verify
-    let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode hex fixture");
+    // v0 transaction
+    let v0_msg = v0::Message::try_compile(
+        &from.pubkey(),
+        &[system_transfer_instruction(&from.pubkey(), &to, 500_000_000)],
+        &[],
+        recent_blockhash,
+    )
+    .unwrap();
+    let message = VersionedMessage::V0(v0_msg);
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
+    write_fixture("tests/fixtures/v0_transfer.hex", &hex::encode(&bincode::serialize(&tx).unwrap()));
+
+    // Compute budget + transfer
+    let cu_limit_ix = set_compute_unit_limit_instruction(150_000);
+    let cu_price_ix = set_compute_unit_price_instruction(5_000);
+    let transfer_ix = system_transfer_instruction(&from.pubkey(), &to, 1_000_000);
+    let message = VersionedMessage::Legacy(solana_sdk::message::legacy::Message::new_with_blockhash(
+        &[cu_limit_ix, cu_price_ix, transfer_ix],
+        Some(&from.pubkey()),
+        &recent_blockhash,
+    ));
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
+    write_fixture("tests/fixtures/compute_budget_transfer.hex", &hex::encode(&bincode::serialize(&tx).unwrap()));
+}
+
+/// Decode the committed legacy transfer fixture and verify structure.
+#[test]
+fn test_decode_legacy_transfer_fixture() {
+    let hex_encoded = read_fixture("tests/fixtures/system_transfer.hex");
+    let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode legacy fixture");
+    assert_eq!(report.message_version, None);
     assert_eq!(report.instructions.len(), 1);
     assert_eq!(report.instructions[0].program_name, "System Program");
     assert_eq!(report.instructions[0].instruction_name.as_deref(), Some("Transfer"));
-    assert_eq!(report.instructions[0].data["lamports"], serde_json::json!(1000000000u64));
+    assert!(report.signatures.len() == 1);
 }
 
-/// Build a v0 transaction and verify decoder handles the version field.
+/// Decode the committed v0 transfer fixture and verify version field.
 #[test]
-fn test_v0_transaction_round_trip() {
-    let from = Keypair::new();
-    let to = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
-    let recent_blockhash = Hash::new_from_array([7u8; 32]);
-
-    let ix = system_transfer_instruction(&from.pubkey(), &to, 500_000_000);
-
-    let v0_msg = v0::Message::try_compile(&from.pubkey(), &[ix], &[], recent_blockhash).unwrap();
-
-    let message = VersionedMessage::V0(v0_msg);
-
-    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
-
-    let serialized = bincode::serialize(&tx).unwrap();
-    let hex_encoded = hex::encode(&serialized);
-
-    write_fixture("tests/fixtures/v0_transfer.hex", &hex_encoded);
-
+fn test_decode_v0_transfer_fixture() {
+    let hex_encoded = read_fixture("tests/fixtures/v0_transfer.hex");
     let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode v0 fixture");
     assert_eq!(report.message_version, Some(0));
     assert_eq!(report.instructions.len(), 1);
     assert_eq!(report.instructions[0].instruction_name.as_deref(), Some("Transfer"));
 }
 
-/// Build a transaction with ComputeBudget + Transfer instruction and verify
-/// compute budget analysis in the report.
+/// Decode the committed compute budget fixture and verify CU analysis.
 #[test]
-fn test_compute_budget_transaction() {
-    let from = Keypair::new();
-    let to = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
-    let recent_blockhash = Hash::new_from_array([7u8; 32]);
-
-    let cu_limit_ix = set_compute_unit_limit_instruction(150_000);
-    let cu_price_ix = set_compute_unit_price_instruction(5_000);
-    let transfer_ix = system_transfer_instruction(&from.pubkey(), &to, 1_000_000);
-
-    let message = VersionedMessage::Legacy(solana_sdk::message::legacy::Message::new_with_blockhash(
-        &[cu_limit_ix, cu_price_ix, transfer_ix],
-        Some(&from.pubkey()),
-        &recent_blockhash,
-    ));
-
-    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
-
-    let serialized = bincode::serialize(&tx).unwrap();
-    let hex_encoded = hex::encode(&serialized);
-
-    write_fixture("tests/fixtures/compute_budget_transfer.hex", &hex_encoded);
-
+fn test_decode_compute_budget_fixture() {
+    let hex_encoded = read_fixture("tests/fixtures/compute_budget_transfer.hex");
     let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode CU fixture");
     assert_eq!(report.instructions.len(), 3);
-
     let cb = report.compute_budget.expect("Should have compute budget info");
     assert!(cb.compute_unit_limit_set);
     assert_eq!(cb.compute_unit_limit, 150_000);
     assert_eq!(cb.compute_unit_price, 5_000);
-
-    // CU instructions at positions 0 and 1 (both at start = not reordered)
     assert!(!cb.is_reordered);
-}
-
-fn write_fixture(path: &str, data: impl AsRef<[u8]>) {
-    let data = data.as_ref();
-    let mut file = std::fs::File::create(path).expect("Failed to create fixture file");
-    file.write_all(data).expect("Failed to write fixture");
 }

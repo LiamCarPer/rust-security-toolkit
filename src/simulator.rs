@@ -150,6 +150,20 @@ struct VerifiedBuildStatus {
 
 /// Verify all program accounts referenced in the transaction.
 pub async fn verify_programs(rpc_url: &str, report: &TransactionReport) -> Vec<RiskFlag> {
+    verify_programs_inner(rpc_url, VERIFIED_BUILD_REGISTRY, report).await
+}
+
+/// Verify programs with an explicit verified build registry URL (for testing).
+#[allow(dead_code)]
+pub async fn verify_programs_with_registry(
+    rpc_url: &str,
+    registry_url: &str,
+    report: &TransactionReport,
+) -> Vec<RiskFlag> {
+    verify_programs_inner(rpc_url, registry_url, report).await
+}
+
+async fn verify_programs_inner(rpc_url: &str, registry_url: &str, report: &TransactionReport) -> Vec<RiskFlag> {
     let mut flags = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -184,7 +198,7 @@ pub async fn verify_programs(rpc_url: &str, report: &TransactionReport) -> Vec<R
         match owner {
             ProgramOwner::Upgradeable => {
                 // Check verified build registry for upgradeable programs
-                match check_verified_build(program_id).await {
+                match check_verified_build(registry_url, program_id).await {
                     Ok(true) => { /* verified, no flag needed */ }
                     Ok(false) => {
                         flags.push(RiskFlag {
@@ -282,9 +296,9 @@ async fn check_program_owner(rpc_url: &str, program_id: &str) -> Result<ProgramO
 }
 
 /// Query the Solana Verified Build Registry for a program.
-async fn check_verified_build(program_id: &str) -> Result<bool> {
+async fn check_verified_build(registry_url: &str, program_id: &str) -> Result<bool> {
     let client = reqwest::Client::new();
-    let url = format!("{}/status/{}", VERIFIED_BUILD_REGISTRY, program_id);
+    let url = format!("{}/status/{}", registry_url, program_id);
 
     let response = client
         .get(&url)

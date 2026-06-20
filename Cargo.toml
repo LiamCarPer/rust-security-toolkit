@@ -25,5 +25,7 @@ name = "rts"
 path = "src/main.rs"
 
 [dev-dependencies]
+httpmock = "0.7"
 solana-transaction-status = "4"
 solana-transaction-status-client-types = "4"
+tokio-test = "0.4.5"

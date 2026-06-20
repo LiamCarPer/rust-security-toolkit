@@ -1,7 +1,7 @@
 # Product Requirements Document (PRD)
 ## Project Name: Rust Security Toolkit (`rust-security-toolkit`)
 **Author:** Liam Carvajal
-**Date:** June 20, 2026
+**Date:** June 17, 2026
 
 ---
 

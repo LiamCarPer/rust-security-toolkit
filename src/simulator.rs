@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::types::{RiskCategory, RiskFlag, RiskSeverity, SimulationResult, TransactionReport};
+use crate::types::{
+    ADDRESS_LOOKUP_TABLE_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, RiskCategory, RiskFlag,
+    RiskSeverity, SYSTEM_PROGRAM_ID, SimulationResult, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, TransactionReport,
+};
 
 const BPF_LOADER_UPGRADEABLE: &str = "BPFLoaderUpgradeab1e11111111111111111111111";
 const BPF_LOADER: &str = "BPFLoader2111111111111111111111111111111111";
@@ -178,11 +181,18 @@ async fn verify_programs_inner(rpc_url: &str, registry_url: &str, report: &Trans
             continue;
         }
 
-        // Skip well-known system programs
-        if program_id == "11111111111111111111111111111111"
-            || program_id == "ComputeBudget111111111111111111111111111111"
-            || program_id == "AddressLookupTab1e1111111111111111111111111"
-        {
+        // Well-known protocol programs are trusted: their bytecode is public and
+        // independently audited. This is a trust list for protocol-level programs,
+        // not a vulnerability blacklist — everything else is verified dynamically.
+        if matches!(
+            program_id.as_str(),
+            SYSTEM_PROGRAM_ID
+                | COMPUTE_BUDGET_PROGRAM_ID
+                | ADDRESS_LOOKUP_TABLE_PROGRAM_ID
+                | TOKEN_PROGRAM_ID
+                | TOKEN_2022_PROGRAM_ID
+                | ASSOCIATED_TOKEN_PROGRAM_ID
+        ) {
             continue;
         }
 

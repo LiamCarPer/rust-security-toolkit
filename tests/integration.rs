@@ -593,3 +593,132 @@ fn test_high_cu_instruction_detection() {
     assert!(!cb.high_cu_instructions.is_empty(), "CreateAccount (15k CU) should be flagged with 30k limit");
     assert_eq!(cb.high_cu_instructions[0], 1);
 }
+
+// ── Compute Budget Reordering Tests ───────────────────────────────────────────
+
+/// A ComputeBudget instruction after a non-CB instruction is an invalid ordering
+/// (the runtime requires CB instructions first) and must be flagged.
+#[test]
+fn test_cb_after_transfer_flagged_reordered() {
+    let from = Keypair::new();
+    let to = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
+    let recent_blockhash = Hash::new_from_array([7u8; 32]);
+
+    let transfer_ix = system_transfer_instruction(&from.pubkey(), &to, 1_000_000);
+    let cu_limit_ix = set_compute_unit_limit_instruction(150_000);
+
+    let message = VersionedMessage::Legacy(solana_sdk::message::legacy::Message::new_with_blockhash(
+        &[transfer_ix, cu_limit_ix],
+        Some(&from.pubkey()),
+        &recent_blockhash,
+    ));
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
+    let hex_encoded = hex::encode(&bincode::serialize(&tx).unwrap());
+
+    let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode CB-after-transfer tx");
+    let cb = report.compute_budget.expect("Should have compute budget info");
+    assert!(cb.is_reordered, "CB after transfer must be flagged as reordered");
+}
+
+/// A ComputeBudget instruction injected mid-transaction (CB, transfer, CB) must
+/// be flagged: the price instruction lands after a non-CB instruction.
+#[test]
+fn test_cb_injected_mid_transaction_flagged() {
+    let from = Keypair::new();
+    let to = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
+    let recent_blockhash = Hash::new_from_array([7u8; 32]);
+
+    let transfer_ix = system_transfer_instruction(&from.pubkey(), &to, 1_000_000);
+    let cu_limit_ix = set_compute_unit_limit_instruction(150_000);
+    let cu_price_ix = set_compute_unit_price_instruction(5_000);
+
+    let message = VersionedMessage::Legacy(solana_sdk::message::legacy::Message::new_with_blockhash(
+        &[cu_limit_ix, transfer_ix, cu_price_ix],
+        Some(&from.pubkey()),
+        &recent_blockhash,
+    ));
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
+    let hex_encoded = hex::encode(&bincode::serialize(&tx).unwrap());
+
+    let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode mid-injected CB tx");
+    let cb = report.compute_budget.expect("Should have compute budget info");
+    assert!(cb.is_reordered, "CB injected mid-transaction must be flagged as reordered");
+}
+
+/// Two ComputeBudget instructions at the start ([0, 1]) form a valid prefix and
+/// must NOT be flagged as reordered.
+#[test]
+fn test_no_cu_reorder_for_prefix_positions() {
+    let mut report = make_report();
+    report.compute_budget = Some(ComputeBudgetInfo {
+        compute_unit_limit: 150_000,
+        compute_unit_price: 0,
+        compute_unit_limit_set: true,
+        compute_budget_positions: vec![0, 1],
+        is_reordered: false,
+        high_cu_instructions: vec![],
+    });
+    validator::validate(&mut report, None);
+    assert!(!report.risk_flags.iter().any(|f| f.category == RiskCategory::ComputeBudgetReordering));
+}
+
+/// With positions [0, 2], only the out-of-prefix position (2) is flagged.
+#[test]
+fn test_cu_reorder_flag_on_gap_position() {
+    let mut report = make_report();
+    report.compute_budget = Some(ComputeBudgetInfo {
+        compute_unit_limit: 150_000,
+        compute_unit_price: 0,
+        compute_unit_limit_set: true,
+        compute_budget_positions: vec![0, 2],
+        is_reordered: true,
+        high_cu_instructions: vec![],
+    });
+    validator::validate(&mut report, None);
+    let reorder_flags: Vec<_> =
+        report.risk_flags.iter().filter(|f| f.category == RiskCategory::ComputeBudgetReordering).collect();
+    assert_eq!(reorder_flags.len(), 1);
+    assert_eq!(reorder_flags[0].instruction_index, Some(2));
+}
+
+/// A single ComputeBudget instruction injected after a transfer (position 1)
+/// must be flagged.
+#[test]
+fn test_cu_reorder_flag_single_mid_tx() {
+    let mut report = make_report();
+    report.compute_budget = Some(ComputeBudgetInfo {
+        compute_unit_limit: 150_000,
+        compute_unit_price: 0,
+        compute_unit_limit_set: true,
+        compute_budget_positions: vec![1],
+        is_reordered: true,
+        high_cu_instructions: vec![],
+    });
+    validator::validate(&mut report, None);
+    assert!(report.risk_flags.iter().any(|f| f.category == RiskCategory::ComputeBudgetReordering));
+}
+
+/// The reorder flag message describes the prefix rule accurately.
+#[test]
+fn test_cu_reorder_message_describes_prefix_rule() {
+    let mut report = make_report();
+    report.compute_budget = Some(ComputeBudgetInfo {
+        compute_unit_limit: 150_000,
+        compute_unit_price: 0,
+        compute_unit_limit_set: true,
+        compute_budget_positions: vec![2],
+        is_reordered: true,
+        high_cu_instructions: vec![],
+    });
+    validator::validate(&mut report, None);
+    let flag = report
+        .risk_flags
+        .iter()
+        .find(|f| f.category == RiskCategory::ComputeBudgetReordering)
+        .expect("Expected reorder flag");
+    assert!(
+        flag.message.contains("must be the first"),
+        "message should describe the prefix rule, got: {}",
+        flag.message
+    );
+}

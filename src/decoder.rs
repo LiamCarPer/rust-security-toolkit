@@ -182,7 +182,11 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
         });
     }
 
-    let is_reordered = cb_positions.iter().any(|&p| p >= cb_positions.len());
+    // The Solana runtime requires all ComputeBudget instructions to be the first
+    // instructions in the message. Positions that are not a contiguous prefix
+    // [0, 1, .., n-1] mean a non-CB instruction precedes a CB instruction — an
+    // invalid ordering or a mid-transaction injection.
+    let is_reordered = cb_positions.iter().enumerate().any(|(i, &p)| p != i);
 
     if !cb_positions.is_empty() || has_explicit_cu_limit {
         compute_budget_info = Some(ComputeBudgetInfo {

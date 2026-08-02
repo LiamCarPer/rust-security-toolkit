@@ -392,15 +392,16 @@ fn validate_compute_budget(report: &TransactionReport, flags: &mut Vec<RiskFlag>
     }
 
     if cb.is_reordered {
-        for &pos in &cb.compute_budget_positions {
-            if pos > 0 {
+        for (prefix_idx, &pos) in cb.compute_budget_positions.iter().enumerate() {
+            if pos != prefix_idx {
                 flags.push(RiskFlag {
                     severity: RiskSeverity::Warning,
                     category: RiskCategory::ComputeBudgetReordering,
                     instruction_index: Some(pos as u8),
                     message: format!(
-                        "Compute Budget Reordering: ComputeBudget instruction at index #{} (expected at index #0). \
-                         Fee/limit manipulation may affect execution priority.",
+                        "Compute Budget Reordering: ComputeBudget instruction at index #{} appears \
+                         after non-ComputeBudget instructions. ComputeBudget instructions must be \
+                         the first instructions in the message.",
                         pos
                     ),
                     details: "Attackers can inject reordered ComputeBudget instructions to manipulate \

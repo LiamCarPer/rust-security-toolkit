@@ -166,7 +166,7 @@ cargo test --test program_verification
 ```
 
 Test coverage:
-- **56 tests** (unit, integration, CLI e2e, mocked program verification)
+- **59 tests** (unit, integration, CLI e2e, mocked program verification)
 - Encoding detection for all four formats (Base58, Base64, Hex, Raw)
 - Transaction round-trip: legacy, v0, and compute budget fixtures
 - Validator rule coverage: CU analysis, signer checks, writable entity detection, ALT integrity, PDA tier 1

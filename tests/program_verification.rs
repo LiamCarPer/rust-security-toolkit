@@ -243,3 +243,34 @@ async fn test_system_programs_skipped() {
     let flags = simulator::verify_programs(&server.url(""), &report).await;
     assert!(flags.is_empty(), "System programs should be skipped without RPC");
 }
+
+/// Known SPL token programs (Token, Token-2022, AToken) are trusted protocol
+/// programs and must be skipped without RPC calls.
+#[tokio::test]
+async fn test_token_programs_skipped() {
+    let server = MockServer::start();
+
+    // No mocks — token programs must be skipped before any RPC call
+    let mut report = make_report_with_program("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+    report.instructions.push(DecodedInstruction {
+        index: 1,
+        program_id: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb".into(),
+        program_name: "Token-2022 Program".into(),
+        instruction_name: Some("Transfer".into()),
+        accounts: vec![],
+        data: serde_json::Value::Null,
+        raw_data_hex: String::new(),
+    });
+    report.instructions.push(DecodedInstruction {
+        index: 2,
+        program_id: "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL".into(),
+        program_name: "Associated Token Program".into(),
+        instruction_name: Some("Create".into()),
+        accounts: vec![],
+        data: serde_json::Value::Null,
+        raw_data_hex: String::new(),
+    });
+
+    let flags = simulator::verify_programs(&server.url(""), &report).await;
+    assert!(flags.is_empty(), "Token programs should be skipped without RPC");
+}

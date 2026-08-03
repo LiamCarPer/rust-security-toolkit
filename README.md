@@ -15,7 +15,7 @@
 - **Transaction simulation** — Calls `simulateTransaction` via RPC to check if the transaction would execute at the current chain tip, reporting CU consumption, program error logs, and custom error codes.
 - **Dynamic program verification** — On-chain program ownership checks (BPFLoader, BPFLoaderUpgradeable) and Solana Verified Build Registry lookups to confirm deployed bytecode matches a public source repository.
 - **Cross-tool integration** — Structured JSON export (`--output-tx-report`) consumable by the Solana Audit Toolkit (`sat`) for correlating runtime account configuration against static `#[derive(Accounts)]` analysis.
-- **Internal correctness gate** — `--validate-decoding` runs a lightweight byte-level parser alongside `solana-sdk` to surface internal tooling bugs transparently.
+- **Internal correctness gate** — `--validate-decoding` runs a lightweight byte-level parser alongside `solana-sdk` and cross-checks every structural count (signatures, accounts, instructions, ALT lookups) against the SDK decode, surfacing internal tooling bugs as `TOOL_DECODE_MISMATCH` warnings.
 
 ## Installation
 
@@ -163,14 +163,23 @@ cargo test --test cli_e2e
 
 # Run only program verification tests (mocked HTTP)
 cargo test --test program_verification
+
+# Run only simulation tests (mocked HTTP)
+cargo test --test simulation
+
+# Run mainnet fixture round-trip tests (offline; skips if no fixtures committed)
+cargo test --test mainnet_fixtures
 ```
 
 Test coverage:
-- **59 tests** (unit, integration, CLI e2e, mocked program verification)
+- **69 tests** (unit, integration, CLI e2e, mocked program verification + simulation, mainnet round-trip)
 - Encoding detection for all four formats (Base58, Base64, Hex, Raw)
 - Transaction round-trip: legacy, v0, and compute budget fixtures
+- Mainnet round-trip: 30 committed mainnet transactions decoded across all four encodings with byte-identical reports
 - Validator rule coverage: CU analysis, signer checks, writable entity detection, ALT integrity, PDA tier 1
 - Program verification: upgradeable, frozen, unknown owner, RPC error handling
+- Simulation: mocked RPC success, program error, CU exhaustion, and RPC error scenarios
+- Differential decoding gate: 150-account legacy, v0, and v0-with-ALT transactions parse with zero warnings
 - CLI end-to-end: JSON output, stdin piping, `--output-tx-report`, `--validate-decoding`, `--no-network`
 
 ## Design principle

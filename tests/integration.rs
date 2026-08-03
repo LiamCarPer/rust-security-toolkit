@@ -77,13 +77,13 @@ fn test_compute_anchor_discriminator() {
 
 #[test]
 fn test_validate_decoding_empty() {
-    let result = decoder::validate_decoding(&[]);
+    let result = decoder::validate_decoding(&[], &make_report());
     assert!(result.is_err());
 }
 
 #[test]
 fn test_validate_decoding_too_short() {
-    let result = decoder::validate_decoding(&[0x01]);
+    let result = decoder::validate_decoding(&[0x01], &make_report());
     assert!(result.is_err() || result.unwrap().len() > 0);
 }
 
@@ -547,6 +547,79 @@ fn test_decode_compute_budget_fixture() {
     assert_eq!(cb.compute_unit_limit, 150_000);
     assert_eq!(cb.compute_unit_price, 5_000);
     assert!(!cb.is_reordered);
+}
+
+/// Legacy transaction with 150 distinct accounts exercises the 2-byte
+/// compact-u16 (short_vec) path for the signature/account counts.
+#[test]
+fn test_validate_decoding_legacy_150_accounts() {
+    let pks: Vec<Pubkey> = (0..150).map(|i| Pubkey::new_from_array([i as u8; 32])).collect();
+    let payer = pks[0];
+    let recent_blockhash = Hash::new_from_array([8u8; 32]);
+
+    let mut accounts = vec![solana_sdk::instruction::AccountMeta::new(pks[0], true)];
+    for pk in &pks[1..] {
+        accounts.push(solana_sdk::instruction::AccountMeta::new(*pk, false));
+    }
+    let mut data = vec![0u8; 12];
+    data[0..4].copy_from_slice(&2u32.to_le_bytes());
+    data[4..12].copy_from_slice(&1_000_000u64.to_le_bytes());
+    let ix = Instruction { program_id: pks[1], accounts, data };
+
+    let message = VersionedMessage::Legacy(solana_sdk::message::legacy::Message::new_with_blockhash(
+        &[ix],
+        Some(&payer),
+        &recent_blockhash,
+    ));
+    let keypair = Keypair::new();
+    let tx = VersionedTransaction { signatures: vec![keypair.sign_message(&message.serialize()).into()], message };
+    let serialized = bincode::serialize(&tx).unwrap();
+
+    let report = decoder::decode_raw_bytes(&serialized, None).expect("Decode legacy 150-account tx");
+    assert_eq!(report.accounts.len(), 150);
+
+    let warnings = decoder::validate_decoding(&serialized, &report).expect("validate_decoding should succeed");
+    assert!(warnings.is_empty(), "expected no warnings, got: {:?}", warnings);
+}
+
+/// The committed v0 fixture (no address table lookups) must parse cleanly.
+#[test]
+fn test_validate_decoding_v0_fixture_clean() {
+    let hex_encoded = read_fixture("tests/fixtures/v0_transfer.hex");
+    let raw_bytes = hex::decode(hex_encoded.trim()).expect("Decode v0 fixture hex");
+    let report = decoder::decode_raw_bytes(&raw_bytes, None).expect("Decode v0 fixture");
+
+    let warnings = decoder::validate_decoding(&raw_bytes, &report).expect("validate_decoding should succeed");
+    assert!(warnings.is_empty(), "expected no warnings, got: {:?}", warnings);
+}
+
+/// v0 message with an address table lookup: the instruction must reference an
+/// ALT address, otherwise `try_compile` drops the unused table.
+#[test]
+fn test_validate_decoding_v0_with_alt() {
+    let payer = Keypair::new();
+    let recent_blockhash = Hash::new_from_array([9u8; 32]);
+
+    let alt = solana_sdk::message::AddressLookupTableAccount {
+        key: Pubkey::new_unique(),
+        addresses: vec![Pubkey::new_unique(), Pubkey::new_unique()],
+    };
+    let mut ix = system_transfer_instruction(&payer.pubkey(), &Pubkey::new_unique(), 1_000_000);
+    ix.accounts.push(solana_sdk::instruction::AccountMeta::new(alt.addresses[0], false));
+
+    let msg = v0::Message::try_compile(&payer.pubkey(), &[ix], &[alt], recent_blockhash).unwrap();
+    let tx = VersionedTransaction {
+        signatures: vec![payer.sign_message(&msg.serialize()).into()],
+        message: VersionedMessage::V0(msg),
+    };
+    let serialized = bincode::serialize(&tx).unwrap();
+
+    let report = decoder::decode_raw_bytes(&serialized, None).expect("Decode v0 ALT tx");
+    assert_eq!(report.address_lookup_tables.len(), 1);
+    assert_eq!(report.address_lookup_tables[0].resolved_accounts.len(), 1);
+
+    let warnings = decoder::validate_decoding(&serialized, &report).expect("validate_decoding should succeed");
+    assert!(warnings.is_empty(), "expected no warnings, got: {:?}", warnings);
 }
 
 fn create_account_instruction(from: &Pubkey, to: &Pubkey, lamports: u64, space: u64, owner: &Pubkey) -> Instruction {

@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
     validator::validate(&mut report, idl.as_ref());
 
     if cli.validate_decoding {
-        match decoder::validate_decoding(&raw_bytes_decoded) {
+        match decoder::validate_decoding(&raw_bytes_decoded, &report) {
             Ok(warnings) => {
                 for w in warnings {
                     report.warnings.push(w);

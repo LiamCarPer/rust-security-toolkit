@@ -19,7 +19,7 @@ The **Rust Security Toolkit** is a transaction forensics and IDL-aligned validat
 
 ### 2.1 CLI Interface (Clap + Tokio Async)
 - **Input Sources:**
-  - Raw transaction bytes via positional argument or `stdin` (pipeline-friendly: `curl <rpc> | rts decode -`).
+  - Raw transaction bytes via positional argument or `stdin` (pipeline-friendly: `curl <rpc> ... | rts -`).
   - `--file <path>`: Read transaction bytes from a file.
 - **Context Inputs:**
   - `--idl <path>`: Anchor IDL JSON to enable named instruction decoding, PDA seed validation, and account-role mapping against expected program behavior.
@@ -60,7 +60,7 @@ These checks operate on the decoded transaction **cross-referenced against an An
   - Parses `ComputeBudget` instructions (`RequestUnits`, `SetComputeUnitLimit`, `SetComputeUnitPrice`).
   - Flags transactions missing explicit CU limit constraints (defaulting to 200k per instruction — a spam-based DoS vector).
   - Highlights high-CU-depletion instruction sequences.
-  - Flags `ComputeBudget` instructions reordered or injected mid-transaction (position other than index 0), which attackers use to manipulate priority fees or trigger frontrunning.
+  - Flags `ComputeBudget` instructions reordered or injected mid-transaction (appearing after non-ComputeBudget instructions — ComputeBudget instructions must be the first instructions in the message), which attackers use to manipulate priority fees or trigger frontrunning.
 - **Address Lookup Table (ALT) Validation (v0 transactions):**
   - Verifies ALT entries are resolved and loaded correctly.
   - Flags empty lookup tables, mismatched address counts, and ALT accounts that may be closed between simulation and execution.
@@ -78,7 +78,7 @@ These checks operate on the decoded transaction **cross-referenced against an An
 The toolkit's primary downstream consumer is the **Solana Audit Toolkit (`sat`)**. The bridge works as follows:
 
 1. The user captures or obtains a raw transaction (explorer export, RPC response, archive replay).
-2. `rts decode --json --output-tx-report report.json <tx_bytes>` produces a structured execution report containing:
+2. `rts --json --output-tx-report report.json <tx_bytes>` produces a structured execution report containing:
    - Mapped account keys with roles (signer, writable, PDA-derived).
    - Parsed instruction names (from IDL discriminators) and decoded argument values.
    - PDA seeds as declared in the IDL vs as observed in the transaction.
@@ -130,7 +130,8 @@ The toolkit's primary downstream consumer is the **Solana Audit Toolkit (`sat`)*
 │    Possible account substitution or seed manipulation.                          │
 │                                                                                │
 │ 🟡 [WARNING] Compute Budget: Reordering Detected                               │
-│    ComputeBudget instruction at index #1 (expected at index #0).               │
+│    ComputeBudget instruction at index #1 appears after                     │
+│    non-ComputeBudget instructions (must be first).                         │
 │    Fee/limit manipulation may affect execution priority.                        │
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -140,16 +141,21 @@ The toolkit's primary downstream consumer is the **Solana Audit Toolkit (`sat`)*
 ## 4. Technical Architecture
 
 ### 4.1 Dependency Stack
-- `solana-sdk = "1.18"` — Canonical transaction deserialization, ALT models, signature structures, `simulate_transaction`.
+- `solana-sdk = "=4.0.1"` — Canonical transaction deserialization, ALT models, signature structures.
+- `solana-client = "=4.1.2"` — RPC client used by the mainnet fixture fetcher.
 - `clap = { version = "4.4", features = ["derive", "env"] }`
-- `tokio = { version = "1.35", features = ["full"] }`
+- `tokio = { version = "1", features = ["full"] }`
 - `serde = { version = "1.0", features = ["derive"] }`
 - `serde_json = "1.0"`
+- `bincode = "1"` — Solana wire-format transaction deserialization.
+- `borsh = { version = "1", features = ["derive"] }` — Anchor IDL argument decoding.
 - `bs58 = "0.5"`
-- `base64 = "0.21"`
+- `base64 = "0.22"`
 - `hex = "0.4"`
-- `colored = "2.1"`
+- `colored = "2"`
 - `sha2 = "0.10"`
+- `anyhow = "1"` — Error handling.
+- `reqwest = { version = "0.12", features = ["json"] }` — RPC and verified build registry HTTP client.
 
 ### 4.2 Modular Structure
 ```
@@ -172,10 +178,11 @@ The Solana validator runtime determines whether a transaction is valid and how i
 ## 5. Testing & CI/CD
 
 ### 5.1 Test Suite
-- **Decoder Tests:** Transaction round-trip: decode 50+ mainnet and devnet transactions (legacy + v0) via `solana-sdk` and verify all fields are populated correctly.
+- **Decoder Tests:** Transaction round-trip: decode 30+ committed mainnet transactions and synthetic legacy/v0 fixtures via `solana-sdk`; all four encodings of each transaction must produce byte-identical reports with all fields populated.
+- **Internal Decoder Gate:** `--validate-decoding` cross-checks the byte-level parser against `solana-sdk` on every fixture (signature, account, instruction, and ALT counts); the 150-account legacy, v0, and v0-with-ALT cases must parse with zero warnings.
 - **Validator Unit Tests:** Each validation rule (PDA seed tiers, missing signer, writable sysvars, CU analysis, ALT checks, reordering) must have dedicated tests with both passing and failing fixture transactions.
 - **Simulator Tests:** Mocked RPC responses for success, failure, CU exhaustion, and program error scenarios.
-- **Regression Fixtures:** `tests/fixtures/` directory containing real transaction bytes in Base58, Base64, Hex, and raw binary — capturing edge cases discovered during development.
+- **Regression Fixtures:** `tests/fixtures/` containing real mainnet transaction bytes (hex) plus synthetic fixtures capturing edge cases; alternate encodings are derived in-test.
 
 ### 5.2 CI Pipeline
 - `.github/workflows/test.yml`: `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check` on every push and PR.

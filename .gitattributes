@@ -1,0 +1,8 @@
+# Normalize all text files to LF in the repository and check out with LF on
+# every platform. This matches rustfmt.toml (newline_style = "Unix"), keeps CI
+# (Linux) and Windows checkouts identical, and eliminates the spurious
+# "modified" flags caused by core.autocrlf=true on Windows.
+* text=auto eol=lf
+
+# Binary fixture files must never be normalized.
+*.bin binary

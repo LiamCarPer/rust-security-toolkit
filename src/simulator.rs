@@ -11,7 +11,7 @@ use crate::types::{
 
 const BPF_LOADER_UPGRADEABLE: &str = "BPFLoaderUpgradeab1e11111111111111111111111";
 const BPF_LOADER: &str = "BPFLoader2111111111111111111111111111111111";
-const VERIFIED_BUILD_REGISTRY: &str = "https://verify.osec.io";
+pub const VERIFIED_BUILD_REGISTRY: &str = "https://verify.osec.io";
 
 #[derive(Debug, Deserialize)]
 struct RpcSimulateResponse {

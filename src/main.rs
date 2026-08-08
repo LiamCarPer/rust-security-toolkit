@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 
-use rust_security_toolkit::types::IdlJson;
-use rust_security_toolkit::{decoder, simulator, ui, validator};
+use rust_security_toolkit::types::{IdlJson, RiskSeverity, TransactionReport};
+use rust_security_toolkit::{decoder, patterns, sim_crossref, simulator, ui, validator};
 
 #[derive(Parser)]
 #[command(
@@ -30,6 +30,14 @@ struct Cli {
     /// RPC endpoint URL for simulation and on-chain verification
     #[arg(long = "rpc", value_name = "URL")]
     rpc: Option<String>,
+
+    /// Verified build registry URL for dynamic program verification
+    #[arg(
+        long = "registry",
+        value_name = "URL",
+        default_value = rust_security_toolkit::simulator::VERIFIED_BUILD_REGISTRY
+    )]
+    registry: String,
 
     /// Output structured JSON instead of the terminal dashboard
     #[arg(long = "json")]
@@ -79,6 +87,8 @@ async fn main() -> Result<()> {
 
     let (raw_bytes_decoded, mut report) = decoder::decode_input(&input_bytes, idl.as_ref())?;
     validator::validate(&mut report, idl.as_ref());
+    let pattern_flags = patterns::detect_patterns(&report);
+    report.risk_flags.extend(pattern_flags);
 
     if cli.validate_decoding {
         match decoder::validate_decoding(&raw_bytes_decoded, &report) {
@@ -111,13 +121,16 @@ async fn main() -> Result<()> {
         }
 
         // Dynamic program verification: ownership + verified build registry
-        let prog_flags = simulator::verify_programs(rpc_url, &report).await;
+        let prog_flags = simulator::verify_programs_with_registry(rpc_url, &cli.registry, &report).await;
         report.risk_flags.extend(prog_flags);
 
         // Resolve address lookup table pubkeys on-chain (v0 transactions)
         let alt_flags = simulator::resolve_address_lookup_tables(rpc_url, &mut report).await;
         report.risk_flags.extend(alt_flags);
     }
+
+    let crossref_flags = sim_crossref::cross_reference(&mut report);
+    report.risk_flags.extend(crossref_flags);
 
     // Annotate token amounts (checked variants resolve offline; unchecked need RPC)
     simulator::resolve_token_amounts(cli.rpc.as_deref(), &mut report).await;
@@ -133,5 +146,72 @@ async fn main() -> Result<()> {
         ui::render_terminal(&report, use_network);
     }
 
-    Ok(())
+    std::process::exit(i32::from(worst_severity_exit_code(&report)));
+}
+
+fn worst_severity_exit_code(report: &TransactionReport) -> u8 {
+    let mut worst = 0;
+    for flag in &report.risk_flags {
+        let code = match flag.severity {
+            RiskSeverity::Critical => 2,
+            RiskSeverity::Warning | RiskSeverity::Info => 1,
+        };
+        if code > worst {
+            worst = code;
+        }
+    }
+    worst
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::worst_severity_exit_code;
+    use rust_security_toolkit::types::{RiskCategory, RiskFlag, RiskSeverity, TransactionReport};
+
+    fn report_with_flags(severities: &[RiskSeverity]) -> TransactionReport {
+        let risk_flags = severities
+            .iter()
+            .map(|severity| RiskFlag {
+                severity: severity.clone(),
+                category: RiskCategory::VerifiedBuild,
+                instruction_index: None,
+                message: String::new(),
+                details: String::new(),
+            })
+            .collect();
+        TransactionReport {
+            status: String::new(),
+            fee_payer: String::new(),
+            signatures: Vec::new(),
+            recent_blockhash: String::new(),
+            message_version: None,
+            accounts: Vec::new(),
+            instructions: Vec::new(),
+            address_lookup_tables: Vec::new(),
+            compute_budget: None,
+            risk_flags,
+            simulation: None,
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn empty_flags_exit_zero() {
+        assert_eq!(worst_severity_exit_code(&report_with_flags(&[])), 0);
+    }
+
+    #[test]
+    fn info_flag_exit_one() {
+        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Info])), 1);
+    }
+
+    #[test]
+    fn warning_flag_exit_one() {
+        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Warning])), 1);
+    }
+
+    #[test]
+    fn critical_flag_exit_two() {
+        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Critical])), 2);
+    }
 }

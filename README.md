@@ -13,7 +13,10 @@
 - **Named instruction decoding** — Parses System Program, SPL Token, Token-2022 (including transfer fee, confidential transfer, permanent delegate, and mint close authority extensions), Associated Token Program, and Compute Budget instructions. Matches Anchor IDL 8-byte discriminators for custom programs.
 - **IDL-aligned structural validation** — PDA seed verification (tier 1 well-formedness + tier 2 runtime seed cross-reference), missing signer detection, insecure writable account flagging, compute unit analysis (missing limits, reordering, high-CU detection), and ALT integrity checks.
 - **Transaction simulation** — Calls `simulateTransaction` via RPC to check if the transaction would execute at the current chain tip, reporting CU consumption, program error logs, and custom error codes.
-- **Dynamic program verification** — On-chain program ownership checks (BPFLoader, BPFLoaderUpgradeable) and Solana Verified Build Registry lookups to confirm deployed bytecode matches a public source repository.
+- **Transaction-layer pattern detection** — Flags multi-instruction attack-shaped flows: approve-then-transfer (delegate drain), non-signing transfer authorities, fee-payer-as-recipient, repeated destinations, and mint-authority takeover paired with minting in one transaction.
+- **Simulation↔decode cross-reference** — With `--rpc`, compares the simulation against the local decode: failing instruction index agreement, CU consumed vs declared limit, log-to-instruction invocation counts, and the *actual* (not worst-case) priority fee from `units_consumed`.
+- **Dynamic program verification** — On-chain program ownership checks (BPFLoader, BPFLoaderUpgradeable) and Solana Verified Build Registry lookups to confirm deployed bytecode matches a public source repository. The registry URL is configurable via `--registry`.
+- **Severity-based exit codes** — The CLI exits `0` (clean), `1` (Info/Warning flags), or `2` (any Critical flag), so scripts and CI can gate on audit results.
 - **Cross-tool integration** — Structured JSON export (`--output-tx-report`) consumable by the Solana Audit Toolkit (`sat`) for correlating runtime account configuration against static `#[derive(Accounts)]` analysis.
 - **Internal correctness gate** — `--validate-decoding` runs a lightweight byte-level parser alongside `solana-sdk` and cross-checks every structural count (signatures, accounts, instructions, ALT lookups) against the SDK decode, surfacing internal tooling bugs as `TOOL_DECODE_MISMATCH` warnings.
 
@@ -91,12 +94,21 @@ rts --output-tx-report report.json <tx_bytes>
 # Full analysis with RPC simulation and program verification
 rts --rpc https://api.mainnet-beta.solana.com <tx_bytes>
 
+# Reuses the default verified build registry (https://verify.osec.io)
+rts --rpc https://api.mainnet-beta.solana.com <tx_bytes>
+
+# Custom verified build registry endpoint
+rts --rpc https://api.mainnet-beta.solana.com --registry https://registry.example.com <tx_bytes>
+
 # Offline mode (skips simulation, ownership checks, verified build registry)
 rts --no-network <tx_bytes>
 
 # Validate internal decoder against solana-sdk
 rts --validate-decoding <tx_bytes>
 ```
+
+Exit codes reflect audit results: `0` = no risk flags, `1` = Info/Warning flags
+(or a fatal runtime error such as missing input), `2` = at least one Critical flag.
 
 ### CLI reference
 
@@ -110,6 +122,7 @@ Options:
   -f, --file <PATH>               Read transaction bytes from a file
       --idl <PATH>                 Anchor IDL JSON for instruction decoding and validation
       --rpc <URL>                  RPC endpoint for simulation and on-chain verification
+      --registry <URL>             Verified build registry URL (default: https://verify.osec.io)
       --json                       Output structured JSON instead of the terminal dashboard
       --output-tx-report <PATH>    Export transaction execution report for sat integration
       --no-network                 Skip all RPC-dependent checks
@@ -117,6 +130,9 @@ Options:
   -h, --help                       Print help
   -V, --version                    Print version
 ```
+
+The process exit code is derived from the worst risk flag severity: `0` clean,
+`1` Info/Warning, `2` Critical (fatal errors also exit `1`).
 
 ## Architecture
 
@@ -130,6 +146,10 @@ src/
 ├── validator.rs    # IDL-aligned structural risk checks (PDA seeds,
 │                   #   signer roles, CU analysis, ALT integrity,
 │                   #   writable account detection)
+├── patterns.rs     # Transaction-layer pattern detection (approve-drain,
+│                   #   authority takeover, repeated destinations)
+├── sim_crossref.rs # Simulation ↔ decode cross-reference (error index,
+│                   #   CU accounting, actual priority fee)
 ├── simulator.rs    # RPC wrappers: simulateTransaction, program
 │                   #   ownership verification, verified build registry
 ├── ui.rs           # ANSI terminal dashboard, JSON export, sat

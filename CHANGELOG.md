@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Transaction-layer pattern detection** (`src/patterns.rs`): approve-then-
+  transfer delegate drain, non-signing token transfer authorities, fee payer
+  as recipient, repeated destinations, and mint-authority takeover with
+  same-transaction minting — flagged under a new `PatternDetection` category
+- **Simulation ↔ decode cross-reference** (`src/sim_crossref.rs`): simulation
+  error index vs decoded range, CU consumed vs declared limit, log
+  invocation counts vs decoded instructions, and the actual (not worst-case)
+  priority fee (`price × units_consumed / 1e6`, `ComputeBudgetInfo
+  .priority_fee_actual`) shown on the dashboard when `--rpc` simulation runs
+- **Severity-based exit codes**: `0` clean, `1` Info/Warning, `2` Critical —
+  always-on, so scripts/CI can gate on audit results
+- **Configurable verified build registry**: `--registry <URL>` flag replaces
+  the hardcoded `https://verify.osec.io` default
 - Known-program account roles: System, Token, Token-2022, and Associated Token
   instructions now carry static positional role names (from/to/source/mint/
   authority/...) on their mapped accounts

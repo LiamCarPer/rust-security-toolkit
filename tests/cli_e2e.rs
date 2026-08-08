@@ -22,7 +22,11 @@ mod cli_e2e_tests {
 
         let output = rts_binary().arg("--json").arg(&hex).output().expect("Failed to execute rts binary");
 
-        assert!(output.status.success(), "rts exited with: {:?}", output.status);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "fixture carries a Critical Insecure Writable flag; severity exit code must be 2"
+        );
         let stdout = String::from_utf8_lossy(&output.stdout);
 
         let report: serde_json::Value = serde_json::from_str(&stdout).expect("rts --json output is not valid JSON");
@@ -38,7 +42,7 @@ mod cli_e2e_tests {
 
         let output = rts_binary().arg("--json").arg(&hex).output().expect("Failed to execute rts binary");
 
-        assert!(output.status.success());
+        assert_eq!(output.status.code(), Some(2), "v0 fixture also carries the Critical Insecure Writable flag");
         let stdout = String::from_utf8_lossy(&output.stdout);
         let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(report["message_version"], serde_json::Value::Number(0.into()));
@@ -51,7 +55,11 @@ mod cli_e2e_tests {
 
         let output = rts_binary().arg("--json").arg(&hex).output().expect("Failed to execute rts binary");
 
-        assert!(output.status.success());
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "fixture carries a Critical Insecure Writable flag; severity exit code must be 2"
+        );
         let stdout = String::from_utf8_lossy(&output.stdout);
         let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
         assert!(report["compute_budget"]["compute_unit_limit_set"].as_bool().unwrap());
@@ -78,7 +86,11 @@ mod cli_e2e_tests {
         }
 
         let output = child.wait_with_output().expect("Failed to wait on rts");
-        assert!(output.status.success());
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "fixture carries a Critical Insecure Writable flag; severity exit code must be 2"
+        );
         let stdout = String::from_utf8_lossy(&output.stdout);
         let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
         assert_eq!(report["status"], "DECODED SUCCESSFULLY");
@@ -98,7 +110,11 @@ mod cli_e2e_tests {
             .output()
             .expect("Failed to execute rts binary");
 
-        assert!(output.status.success());
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "fixture carries a Critical Insecure Writable flag; severity exit code must be 2"
+        );
 
         let report_json = std::fs::read_to_string(report_path).expect("Tx report file not written");
         let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
@@ -117,7 +133,11 @@ mod cli_e2e_tests {
 
         let output = rts_binary().arg(&hex).output().expect("Failed to execute rts binary");
 
-        assert!(output.status.success());
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "fixture carries a Critical Insecure Writable flag; severity exit code must be 2"
+        );
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("SOLANA TRANSACTION FORENSICS REPORT"));
         assert!(stdout.contains("System Program"));
@@ -136,7 +156,11 @@ mod cli_e2e_tests {
             .output()
             .expect("Failed to execute rts binary");
 
-        assert!(output.status.success());
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "fixture carries a Critical Insecure Writable flag; severity exit code must be 2"
+        );
     }
 
     /// Verify --no-network flag.
@@ -146,7 +170,11 @@ mod cli_e2e_tests {
 
         let output = rts_binary().arg("--no-network").arg(&hex).output().expect("Failed to execute rts binary");
 
-        assert!(output.status.success());
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "fixture carries a Critical Insecure Writable flag; severity exit code must be 2"
+        );
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("--no-network"));
     }
@@ -169,7 +197,11 @@ mod cli_e2e_tests {
             .output()
             .expect("Failed to execute rts binary");
 
-        assert!(output.status.success(), "rts exited with: {:?}", output.status);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "fixture carries a Critical Insecure Writable flag; severity exit code must be 2"
+        );
         let stdout = String::from_utf8_lossy(&output.stdout);
         let report: serde_json::Value = serde_json::from_str(&stdout).expect("rts --json output is not valid JSON");
         assert_eq!(report["status"], "DECODED SUCCESSFULLY");
@@ -195,7 +227,11 @@ mod cli_e2e_tests {
         }
 
         let output = child.wait_with_output().expect("Failed to wait on rts");
-        assert!(output.status.success());
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "fixture carries a Critical Insecure Writable flag; severity exit code must be 2"
+        );
         let stdout = String::from_utf8_lossy(&output.stdout);
         let report: serde_json::Value = serde_json::from_str(&stdout).expect("rts --json output is not valid JSON");
         assert_eq!(report["status"], "DECODED SUCCESSFULLY");

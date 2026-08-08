@@ -4,6 +4,8 @@ pub mod decoder;
 pub mod encoding;
 pub mod instruction_decoder;
 pub mod internal_parser;
+pub mod patterns;
+pub mod sim_crossref;
 pub mod simulator;
 pub mod types;
 pub mod ui;

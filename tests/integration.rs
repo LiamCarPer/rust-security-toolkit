@@ -174,6 +174,7 @@ fn test_cu_reorder_flag() {
         is_reordered: true,
         high_cu_instructions: vec![],
         priority_fee_lamports: 0,
+        priority_fee_actual: None,
     });
     validator::validate(&mut report, None);
     assert!(report.risk_flags.iter().any(|f| f.category == RiskCategory::ComputeBudgetReordering));
@@ -190,6 +191,7 @@ fn test_no_cu_reorder_when_at_index_zero() {
         is_reordered: false,
         high_cu_instructions: vec![],
         priority_fee_lamports: 0,
+        priority_fee_actual: None,
     });
     validator::validate(&mut report, None);
     assert!(!report.risk_flags.iter().any(|f| f.category == RiskCategory::ComputeBudgetReordering));
@@ -395,6 +397,7 @@ fn make_report_with_data() -> TransactionReport {
             is_reordered: false,
             high_cu_instructions: vec![],
             priority_fee_lamports: 0,
+            priority_fee_actual: None,
         }),
         risk_flags: vec![],
         simulation: None,
@@ -1069,6 +1072,7 @@ fn test_no_cu_reorder_for_prefix_positions() {
         is_reordered: false,
         high_cu_instructions: vec![],
         priority_fee_lamports: 0,
+        priority_fee_actual: None,
     });
     validator::validate(&mut report, None);
     assert!(!report.risk_flags.iter().any(|f| f.category == RiskCategory::ComputeBudgetReordering));
@@ -1086,6 +1090,7 @@ fn test_cu_reorder_flag_on_gap_position() {
         is_reordered: true,
         high_cu_instructions: vec![],
         priority_fee_lamports: 0,
+        priority_fee_actual: None,
     });
     validator::validate(&mut report, None);
     let reorder_flags: Vec<_> =
@@ -1107,6 +1112,7 @@ fn test_cu_reorder_flag_single_mid_tx() {
         is_reordered: true,
         high_cu_instructions: vec![],
         priority_fee_lamports: 0,
+        priority_fee_actual: None,
     });
     validator::validate(&mut report, None);
     assert!(report.risk_flags.iter().any(|f| f.category == RiskCategory::ComputeBudgetReordering));
@@ -1124,6 +1130,7 @@ fn test_cu_reorder_message_describes_prefix_rule() {
         is_reordered: true,
         high_cu_instructions: vec![],
         priority_fee_lamports: 0,
+        priority_fee_actual: None,
     });
     validator::validate(&mut report, None);
     let flag = report

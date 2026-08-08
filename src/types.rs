@@ -106,6 +106,10 @@ pub struct ComputeBudgetInfo {
     /// the maximum the fee payer commits to.
     #[serde(default)]
     pub priority_fee_lamports: u64,
+    /// Actual priority fee in lamports (price × units consumed / 1e6) when a
+    /// simulation result is available; None otherwise.
+    #[serde(default)]
+    pub priority_fee_actual: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +158,12 @@ pub enum RiskCategory {
     InternalDecodeMismatch,
     PdaWellFormedness,
     IdlAccountMismatch,
+    /// Transaction-layer pattern spanning multiple instructions/accounts
+    /// (e.g. approve-then-transfer, mint authority takeover).
+    PatternDetection,
+    /// Disagreement between a simulation result and the local decode
+    /// (error index, CU accounting, log-to-instruction correlation).
+    SimulationMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

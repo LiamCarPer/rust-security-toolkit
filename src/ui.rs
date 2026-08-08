@@ -45,6 +45,13 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
                 cb.priority_fee_lamports,
                 cb.priority_fee_lamports as f64 / 1e9
             );
+            if let Some(actual) = cb.priority_fee_actual {
+                println!(
+                    "[+] Priority Fee Actual: {} lamports (≈ {:.6} SOL, from simulation units consumed)",
+                    actual,
+                    actual as f64 / 1e9
+                );
+            }
         }
     }
 

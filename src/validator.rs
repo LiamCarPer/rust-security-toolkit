@@ -639,6 +639,7 @@ mod tests {
                 is_reordered: false,
                 high_cu_instructions: vec![],
                 priority_fee_lamports: 0,
+                priority_fee_actual: None,
             }),
             risk_flags: vec![],
             simulation: None,

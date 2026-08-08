@@ -244,6 +244,7 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
             is_reordered,
             high_cu_instructions: Vec::new(),
             priority_fee_lamports,
+            priority_fee_actual: None,
         });
 
         let high_cu = estimate_high_cu_instructions(&instructions, cu_limit);

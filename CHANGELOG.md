@@ -4,11 +4,36 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Known-program account roles: System, Token, Token-2022, and Associated Token
+  instructions now carry static positional role names (from/to/source/mint/
+  authority/...) on their mapped accounts
+- Human-readable token amounts on Transfer/Approve/MintTo/Burn instructions:
+  checked variants resolve offline from inline decimals; unchecked variants
+  resolve mint decimals via cached RPC `getAccountInfo` when `--rpc` is given
+- Worst-case priority fee reporting: total lamports/SOL from
+  `SetComputeUnitPrice` x CU limit, shown on the terminal dashboard and in JSON
+
 ### Fixed
+- Compute Budget discriminator mapping: `RequestHeapFrame` (1) was mislabeled
+  as `SetComputeUnitLimit`, and the real `SetComputeUnitLimit` (2) was never
+  parsed — explicit CU limits silently defaulted to 200k and raised a false
+  "Missing Compute Budget" warning
+- System instruction discriminators 7-11: `AuthorizeNonceAccount` was labeled
+  "ResizeNonceAccount" and Allocate/AllocateWithSeed/AssignWithSeed/
+  TransferWithSeed were shifted one off with wrong field offsets (now verified
+  by round-trip tests against the real SDK serialization)
+- `compute_budget_transfer.hex` fixture regenerated with the correct
+  `SetComputeUnitLimit` tag
 - `--output-tx-report` now emits the sat contract keys (`name` per instruction,
   `pda_info` per account with `bump`, top-level `program_name`) and populates
-  IDL-declared account names, making the cross-tool correlation actually work
-  (verified end-to-end against sat).
+  IDL-declared account names, making the cross-tool correlation work
+  (verified end-to-end against sat)
+
+### Changed
+- Security Audit CI gates on `cargo deny check` (cargo-geiger is informational,
+  runs on nightly, and no longer blocks the pipeline)
+- `cargo clippy --all-targets -- -D warnings` is clean including test targets
 
 ## [v0.1.0] - 2026-08-08
 

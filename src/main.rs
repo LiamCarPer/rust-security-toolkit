@@ -119,6 +119,9 @@ async fn main() -> Result<()> {
         report.risk_flags.extend(alt_flags);
     }
 
+    // Annotate token amounts (checked variants resolve offline; unchecked need RPC)
+    simulator::resolve_token_amounts(cli.rpc.as_deref(), &mut report).await;
+
     if let Some(ref output_path) = cli.output_tx_report {
         let report_json = ui::render_tx_report(&report, idl.as_ref().map(|i| i.name.as_str()).unwrap_or(""));
         std::fs::write(output_path, report_json).context("Failed to write tx-report output")?;

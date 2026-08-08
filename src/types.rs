@@ -49,6 +49,10 @@ pub struct DecodedInstruction {
     pub accounts: Vec<MappedAccount>,
     pub data: serde_json::Value,
     pub raw_data_hex: String,
+    /// Human-readable token amount when resolvable (checked variants carry
+    /// decimals inline; unchecked variants need an RPC mint/account lookup).
+    #[serde(default)]
+    pub token_amount: Option<TokenAmount>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +74,15 @@ pub struct AltResolution {
     pub resolved: bool,
 }
 
+/// A token amount annotated with its mint decimals and a precomputed
+/// human-readable rendering (e.g. `"1.5"` for 1_500_000 raw with 6 decimals).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenAmount {
+    pub raw: u64,
+    pub decimals: u8,
+    pub human: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedAccount {
     pub index_in_tx: u8,
@@ -88,6 +101,11 @@ pub struct ComputeBudgetInfo {
     pub compute_budget_positions: Vec<usize>,
     pub is_reordered: bool,
     pub high_cu_instructions: Vec<u8>,
+    /// Worst-case priority fee in lamports: price (micro-lamports/CU) ×
+    /// limit (CU) / 1e6. The runtime charges price × consumed CU, so this is
+    /// the maximum the fee payer commits to.
+    #[serde(default)]
+    pub priority_fee_lamports: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

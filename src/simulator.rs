@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    ADDRESS_LOOKUP_TABLE_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, RiskCategory, RiskFlag,
-    RiskSeverity, SYSTEM_PROGRAM_ID, SimulationResult, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, TransactionReport,
+    ADDRESS_LOOKUP_TABLE_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, DecodedInstruction,
+    RiskCategory, RiskFlag, RiskSeverity, SYSTEM_PROGRAM_ID, SimulationResult, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
+    TokenAmount, TransactionReport,
 };
 
 const BPF_LOADER_UPGRADEABLE: &str = "BPFLoaderUpgradeab1e11111111111111111111111";
@@ -581,6 +584,171 @@ async fn fetch_account_data(client: &reqwest::Client, rpc_url: &str, address: &s
     }
 }
 
+// ── Token Amount Resolution ──────────────────────────────────────────────────
+
+/// jsonParsed getAccountInfo response — `result.value.data` holds the parsed
+/// JSON payload (mint `decimals` or token account `tokenAmount`).
+#[derive(Debug, Deserialize)]
+struct GetAccountInfoParsedResponse {
+    result: Option<GetAccountInfoParsedResult>,
+    error: Option<RpcError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetAccountInfoParsedResult {
+    value: Option<GetAccountInfoParsedValue>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetAccountInfoParsedValue {
+    data: Option<serde_json::Value>,
+}
+
+/// Annotate token transfer/mint/burn instructions with human-readable amounts.
+/// Checked variants carry decimals inline (offline resolution); unchecked
+/// variants resolve decimals via RPC `getAccountInfo` (jsonParsed) when an
+/// endpoint is provided. Resolution is silent: failures leave
+/// `token_amount` unset rather than failing or emitting risk flags.
+pub async fn resolve_token_amounts(rpc_url: Option<&str>, report: &mut TransactionReport) {
+    let client = reqwest::Client::new();
+    let mut decimals_cache: HashMap<String, Option<u8>> = HashMap::new();
+
+    for ix in &mut report.instructions {
+        if ix.program_id != TOKEN_PROGRAM_ID && ix.program_id != TOKEN_2022_PROGRAM_ID {
+            continue;
+        }
+        let Some(name) = ix.instruction_name.clone() else { continue };
+        if !matches!(
+            name.as_str(),
+            "Transfer"
+                | "TransferChecked"
+                | "Approve"
+                | "ApproveChecked"
+                | "MintTo"
+                | "MintToChecked"
+                | "Burn"
+                | "BurnChecked"
+                | "AmountToUiAmount"
+        ) {
+            continue;
+        }
+        // Skip instructions without an `amount` payload entirely.
+        let Some(amount) = ix.data.get("amount").and_then(serde_json::Value::as_u64) else { continue };
+
+        // Checked variants carry decimals inline — resolved offline, no RPC.
+        if resolve_inline_decimals(ix).is_some() {
+            continue;
+        }
+
+        // Unchecked variants need decimals from the mint, or from the source
+        // token account for Transfer/Approve, via jsonParsed getAccountInfo.
+        let Some(rpc_url) = rpc_url else { continue };
+        let Some(position) = mint_source_position(&name) else { continue };
+        let Some(pubkey) = ix.accounts.get(position).map(|a| a.pubkey.as_str()) else { continue };
+
+        let is_mint = !matches!(name.as_str(), "Transfer" | "Approve");
+        if let Some(decimals) = fetch_parsed_decimals(&client, rpc_url, pubkey, is_mint, &mut decimals_cache).await {
+            ix.token_amount = Some(TokenAmount { raw: amount, decimals, human: format_ui_amount(amount, decimals) });
+        }
+    }
+}
+
+/// Resolve amount + decimals purely from instruction data (checked variants
+/// carry both fields inline). Sets `token_amount` and returns the decimals,
+/// or None when either field is missing or `token_amount` is left unset.
+fn resolve_inline_decimals(ix: &mut DecodedInstruction) -> Option<u8> {
+    let amount = ix.data.get("amount").and_then(serde_json::Value::as_u64)?;
+    let decimals = ix.data.get("decimals").and_then(serde_json::Value::as_u64)? as u8;
+    ix.token_amount = Some(TokenAmount { raw: amount, decimals, human: format_ui_amount(amount, decimals) });
+    Some(decimals)
+}
+
+/// Positional lookup of the mint (or source token account for unchecked
+/// Transfer/Approve) within `instruction.accounts`.
+/// Returns Some(0) for MintTo/MintToChecked/AmountToUiAmount,
+/// Some(1) for Burn/BurnChecked, Some(0) for Transfer/Approve
+/// (source account fallback), None otherwise.
+fn mint_source_position(instruction_name: &str) -> Option<usize> {
+    match instruction_name {
+        "MintTo" | "MintToChecked" | "AmountToUiAmount" | "Transfer" | "Approve" => Some(0),
+        "Burn" | "BurnChecked" => Some(1),
+        _ => None,
+    }
+}
+
+/// Resolve an account's decimals via jsonParsed getAccountInfo, caching by
+/// pubkey so each unique account costs exactly one RPC call. Any fetch or
+/// parse failure is cached as None and skipped silently.
+async fn fetch_parsed_decimals(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    pubkey: &str,
+    is_mint: bool,
+    cache: &mut HashMap<String, Option<u8>>,
+) -> Option<u8> {
+    if let Some(&cached) = cache.get(pubkey) {
+        return cached;
+    }
+    let decimals = fetch_parsed_decimals_uncached(client, rpc_url, pubkey, is_mint).await;
+    cache.insert(pubkey.to_string(), decimals);
+    decimals
+}
+
+async fn fetch_parsed_decimals_uncached(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    pubkey: &str,
+    is_mint: bool,
+) -> Option<u8> {
+    let request = GetAccountInfoRequest {
+        jsonrpc: "2.0".to_string(),
+        id: 1,
+        method: "getAccountInfo".to_string(),
+        params: (
+            pubkey.to_string(),
+            GetAccountInfoConfig { encoding: "jsonParsed".to_string(), commitment: "confirmed".to_string() },
+        ),
+    };
+
+    let response = client.post(rpc_url).json(&request).timeout(std::time::Duration::from_secs(30)).send().await.ok()?;
+    let body: GetAccountInfoParsedResponse = response.json().await.ok()?;
+    if body.error.is_some() {
+        return None;
+    }
+    let data = body.result?.value?.data?;
+    if is_mint { decimals_from_data(&data) } else { decimals_from_token_amount(&data) }
+}
+
+/// Extract a mint's decimals from jsonParsed getAccountInfo account data
+/// (`parsed.info.decimals`).
+fn decimals_from_data(data: &serde_json::Value) -> Option<u8> {
+    data.get("parsed")?.get("info")?.get("decimals")?.as_u64().map(|d| d as u8)
+}
+
+/// Extract a token account's decimals from jsonParsed getAccountInfo account
+/// data (`parsed.info.tokenAmount.decimals`).
+fn decimals_from_token_amount(data: &serde_json::Value) -> Option<u8> {
+    data.get("parsed")?.get("info")?.get("tokenAmount")?.get("decimals")?.as_u64().map(|d| d as u8)
+}
+
+/// Format raw units with `decimals` decimal places, trimming trailing zeros.
+/// Examples: (1_500_000, 6) -> "1.5"; (1_000_000, 6) -> "1"; (123_456, 2) -> "1234.56";
+/// (1, 6) -> "0.000001"; (0, 6) -> "0"; (99, 0) -> "99".
+fn format_ui_amount(raw: u64, decimals: u8) -> String {
+    // 10^19 overflows u64 — such mints don't exist in practice.
+    if decimals == 0 || decimals >= 19 {
+        return raw.to_string();
+    }
+    let div = 10u64.pow(decimals as u32);
+    let int_part = raw / div;
+    let frac = raw % div;
+    if frac == 0 {
+        return int_part.to_string();
+    }
+    let frac_str = format!("{:0width$}", frac, width = decimals as usize);
+    format!("{}.{}", int_part, frac_str.trim_end_matches('0'))
+}
+
 /// Check the on-chain owner of a program account via RPC getAccountInfo.
 async fn check_program_owner(rpc_url: &str, program_id: &str) -> Result<ProgramOwner> {
     let client = reqwest::Client::new();
@@ -648,4 +816,96 @@ async fn check_verified_build(registry_url: &str, program_id: &str) -> Result<bo
 
     let status: VerifiedBuildStatus = response.json().await.context("Failed to parse registry response")?;
     Ok(status.is_verified)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_ui_amount_cases() {
+        assert_eq!(format_ui_amount(1_500_000, 6), "1.5");
+        assert_eq!(format_ui_amount(1_000_000, 6), "1");
+        assert_eq!(format_ui_amount(123_456, 2), "1234.56");
+        assert_eq!(format_ui_amount(1, 6), "0.000001");
+        assert_eq!(format_ui_amount(0, 6), "0");
+        assert_eq!(format_ui_amount(99, 0), "99");
+    }
+
+    #[test]
+    fn format_ui_amount_guards_large_decimals() {
+        // 10^19 overflows u64; fall back to the raw integer rendering.
+        assert_eq!(format_ui_amount(1_000_000, 19), "1000000");
+        assert_eq!(format_ui_amount(7, 255), "7");
+    }
+
+    #[test]
+    fn mint_source_position_table() {
+        assert_eq!(mint_source_position("MintTo"), Some(0));
+        assert_eq!(mint_source_position("MintToChecked"), Some(0));
+        assert_eq!(mint_source_position("AmountToUiAmount"), Some(0));
+        assert_eq!(mint_source_position("Burn"), Some(1));
+        assert_eq!(mint_source_position("BurnChecked"), Some(1));
+        assert_eq!(mint_source_position("Transfer"), Some(0));
+        assert_eq!(mint_source_position("Approve"), Some(0));
+        // Checked transfer/approve carry decimals inline; no positional lookup.
+        assert_eq!(mint_source_position("TransferChecked"), None);
+        assert_eq!(mint_source_position("ApproveChecked"), None);
+        assert_eq!(mint_source_position("InitializeMint"), None);
+        assert_eq!(mint_source_position(""), None);
+    }
+
+    #[test]
+    fn decimals_from_data_reads_mint_decimals() {
+        let data = serde_json::json!({ "parsed": { "info": { "decimals": 9 } } });
+        assert_eq!(decimals_from_data(&data), Some(9));
+        assert_eq!(decimals_from_token_amount(&data), None);
+    }
+
+    #[test]
+    fn decimals_from_token_amount_reads_account_decimals() {
+        let data = serde_json::json!({
+            "parsed": { "info": { "tokenAmount": { "decimals": 6, "amount": "1500000" } } }
+        });
+        assert_eq!(decimals_from_token_amount(&data), Some(6));
+        assert_eq!(decimals_from_data(&data), None);
+    }
+
+    #[test]
+    fn resolve_inline_decimals_sets_token_amount_offline() {
+        let mut ix = DecodedInstruction {
+            index: 0,
+            program_id: TOKEN_PROGRAM_ID.to_string(),
+            program_name: "SPL Token".to_string(),
+            instruction_name: Some("TransferChecked".to_string()),
+            accounts: Vec::new(),
+            data: serde_json::json!({ "amount": 1_500_000u64, "decimals": 6u64 }),
+            raw_data_hex: "00".to_string(),
+            token_amount: None,
+        };
+
+        assert_eq!(resolve_inline_decimals(&mut ix), Some(6));
+        let token_amount = ix.token_amount.expect("token_amount should be set");
+        assert_eq!(token_amount.raw, 1_500_000);
+        assert_eq!(token_amount.decimals, 6);
+        assert_eq!(token_amount.human, "1.5");
+    }
+
+    #[test]
+    fn resolve_inline_decimals_leaves_unset_without_decimals() {
+        let mut ix = DecodedInstruction {
+            index: 0,
+            program_id: TOKEN_2022_PROGRAM_ID.to_string(),
+            program_name: "Token-2022".to_string(),
+            instruction_name: Some("Transfer".to_string()),
+            accounts: Vec::new(),
+            data: serde_json::json!({ "amount": 5u64 }),
+            raw_data_hex: "03".to_string(),
+            token_amount: None,
+        };
+
+        // Unchecked variant without inline decimals — nothing to resolve offline.
+        assert_eq!(resolve_inline_decimals(&mut ix), None);
+        assert!(ix.token_amount.is_none());
+    }
 }

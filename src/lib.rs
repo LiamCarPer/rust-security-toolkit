@@ -1,3 +1,4 @@
+pub mod account_roles;
 pub mod anchor_decoder;
 pub mod decoder;
 pub mod encoding;

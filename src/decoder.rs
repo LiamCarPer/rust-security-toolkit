@@ -7,7 +7,7 @@ use crate::types::{
     ResolvedAccount, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, TransactionReport,
 };
 
-use crate::{anchor_decoder, encoding, instruction_decoder, internal_parser};
+use crate::{account_roles, anchor_decoder, encoding, instruction_decoder, internal_parser};
 
 pub use anchor_decoder::compute_anchor_discriminator;
 pub use encoding::detect_encoding;
@@ -221,6 +221,7 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
             accounts: mapped_accounts,
             data: decoded_data,
             raw_data_hex,
+            token_amount: None,
         });
     }
 
@@ -231,6 +232,10 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
     let is_reordered = cb_positions.iter().enumerate().any(|(i, &p)| p != i);
 
     if !cb_positions.is_empty() || has_explicit_cu_limit {
+        // Worst-case priority fee: price (micro-lamports/CU) x limit (CU) / 1e6.
+        // The runtime charges price x consumed CU, so this is the maximum the
+        // fee payer commits to.
+        let priority_fee_lamports = (cu_price as u128 * cu_limit as u128 / 1_000_000) as u64;
         compute_budget_info = Some(ComputeBudgetInfo {
             compute_unit_limit: cu_limit,
             compute_unit_price: cu_price,
@@ -238,6 +243,7 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
             compute_budget_positions: cb_positions,
             is_reordered,
             high_cu_instructions: Vec::new(),
+            priority_fee_lamports,
         });
 
         let high_cu = estimate_high_cu_instructions(&instructions, cu_limit);
@@ -245,6 +251,10 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
             cb.high_cu_instructions = high_cu;
         }
     }
+
+    // Static role names for well-known programs (System/Token/Token-2022/AToken)
+    // only fill accounts whose names are still unset.
+    account_roles::annotate_known_program_roles(&mut instructions);
 
     if let Some(idl) = idl {
         annotate_instruction_account_names(&mut instructions, idl);
@@ -345,11 +355,16 @@ fn parse_compute_budget(data: &[u8]) -> Option<(u32, u64)> {
     let mut limit: u32 = 0;
     let mut price: u64 = 0;
     match data[0] {
+        // 0: RequestUnitsDeprecated { units, additional_fee } — sets a CU limit.
         0 if data.len() >= 5 => limit = u32::from_le_bytes([data[1], data[2], data[3], data[4]]),
-        1 if data.len() >= 5 => limit = u32::from_le_bytes([data[1], data[2], data[3], data[4]]),
+        // 1: RequestHeapFrame — heap size only, NOT a CU limit.
+        // 2: SetComputeUnitLimit { units } — the modern CU limit instruction.
+        2 if data.len() >= 5 => limit = u32::from_le_bytes([data[1], data[2], data[3], data[4]]),
+        // 3: SetComputeUnitPrice { micro_lamports }.
         3 if data.len() >= 9 => {
             price = u64::from_le_bytes([data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8]]);
         }
+        // 4: SetLoadedAccountsDataSizeLimit — not a CU limit.
         _ => {}
     }
     Some((limit, price))
@@ -398,4 +413,63 @@ fn estimate_high_cu_instructions(instructions: &[DecodedInstruction], cu_limit: 
             if cost >= threshold { Some(ix.index) } else { None }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_compute_budget;
+
+    fn cb(data: &[u8]) -> (u32, u64) {
+        parse_compute_budget(data).unwrap_or((0, 0))
+    }
+
+    #[test]
+    fn request_units_deprecated_sets_limit() {
+        // 0: RequestUnitsDeprecated { units: 200_000, additional_fee: 0 }
+        let mut data = vec![0u8];
+        data.extend_from_slice(&200_000u32.to_le_bytes());
+        assert_eq!(cb(&data), (200_000, 0));
+    }
+
+    #[test]
+    fn request_heap_frame_is_not_a_cu_limit() {
+        // 1: RequestHeapFrame — must NOT be treated as a CU limit.
+        let mut data = vec![1u8];
+        data.extend_from_slice(&131_072u32.to_le_bytes());
+        assert_eq!(cb(&data), (0, 0));
+    }
+
+    #[test]
+    fn set_compute_unit_limit_sets_limit() {
+        // 2: SetComputeUnitLimit { units: 1_400_000 } — the modern instruction.
+        let mut data = vec![2u8];
+        data.extend_from_slice(&1_400_000u32.to_le_bytes());
+        assert_eq!(cb(&data), (1_400_000, 0));
+    }
+
+    #[test]
+    fn set_compute_unit_price_sets_price() {
+        // 3: SetComputeUnitPrice { micro_lamports: 123_456_789 }
+        let mut data = vec![3u8];
+        data.extend_from_slice(&123_456_789u64.to_le_bytes());
+        assert_eq!(cb(&data), (0, 123_456_789));
+    }
+
+    #[test]
+    fn loaded_accounts_size_limit_is_not_a_cu_limit() {
+        // 4: SetLoadedAccountsDataSizeLimit — must not set limit or price.
+        let mut data = vec![4u8];
+        data.extend_from_slice(&64_512u32.to_le_bytes());
+        assert_eq!(cb(&data), (0, 0));
+    }
+
+    #[test]
+    fn limit_and_price_parse_together() {
+        // A realistic modern fee-priority pair: limit 2 then price 3.
+        let mut data = vec![3u8];
+        data.extend_from_slice(&10_000u64.to_le_bytes());
+        let (limit, price) = parse_compute_budget(&data).unwrap();
+        assert_eq!(limit, 0);
+        assert_eq!(price, 10_000);
+    }
 }

@@ -21,6 +21,7 @@ fn make_report_with_program(program_id: &str) -> TransactionReport {
             accounts: vec![],
             data: serde_json::Value::Null,
             raw_data_hex: String::new(),
+            token_amount: None,
         }],
         address_lookup_tables: vec![],
         compute_budget: None,
@@ -240,6 +241,7 @@ async fn test_system_programs_skipped() {
         accounts: vec![],
         data: serde_json::Value::Null,
         raw_data_hex: String::new(),
+        token_amount: None,
     });
 
     let flags = simulator::verify_programs(&server.url(""), &report).await;
@@ -370,6 +372,7 @@ async fn test_token_programs_skipped() {
         accounts: vec![],
         data: serde_json::Value::Null,
         raw_data_hex: String::new(),
+        token_amount: None,
     });
     report.instructions.push(DecodedInstruction {
         index: 2,
@@ -379,6 +382,7 @@ async fn test_token_programs_skipped() {
         accounts: vec![],
         data: serde_json::Value::Null,
         raw_data_hex: String::new(),
+        token_amount: None,
     });
 
     let flags = simulator::verify_programs(&server.url(""), &report).await;

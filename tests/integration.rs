@@ -84,7 +84,7 @@ fn test_validate_decoding_empty() {
 #[test]
 fn test_validate_decoding_too_short() {
     let result = decoder::validate_decoding(&[0x01], &make_report());
-    assert!(result.is_err() || result.unwrap().len() > 0);
+    assert!(result.is_err() || !result.unwrap().is_empty());
 }
 
 // ── Input Decoding Tests ────────────────────────────────────────────────────
@@ -173,6 +173,7 @@ fn test_cu_reorder_flag() {
         compute_budget_positions: vec![2, 5],
         is_reordered: true,
         high_cu_instructions: vec![],
+        priority_fee_lamports: 0,
     });
     validator::validate(&mut report, None);
     assert!(report.risk_flags.iter().any(|f| f.category == RiskCategory::ComputeBudgetReordering));
@@ -188,6 +189,7 @@ fn test_no_cu_reorder_when_at_index_zero() {
         compute_budget_positions: vec![0],
         is_reordered: false,
         high_cu_instructions: vec![],
+        priority_fee_lamports: 0,
     });
     validator::validate(&mut report, None);
     assert!(!report.risk_flags.iter().any(|f| f.category == RiskCategory::ComputeBudgetReordering));
@@ -302,6 +304,7 @@ fn test_missing_signer_with_idl() {
         }],
         data: serde_json::Value::Null,
         raw_data_hex: String::new(),
+        token_amount: None,
     });
 
     validator::validate(&mut report, Some(&idl));
@@ -343,6 +346,7 @@ fn test_signer_present_not_flagged() {
         }],
         data: serde_json::Value::Null,
         raw_data_hex: String::new(),
+        token_amount: None,
     });
 
     validator::validate(&mut report, Some(&idl));
@@ -380,6 +384,7 @@ fn make_report_with_data() -> TransactionReport {
             }],
             data: serde_json::json!({"lamports": 1000}),
             raw_data_hex: "02000000e803000000000000".into(),
+            token_amount: None,
         }],
         address_lookup_tables: vec![],
         compute_budget: Some(ComputeBudgetInfo {
@@ -389,6 +394,7 @@ fn make_report_with_data() -> TransactionReport {
             compute_budget_positions: vec![0],
             is_reordered: false,
             high_cu_instructions: vec![],
+            priority_fee_lamports: 0,
         }),
         risk_flags: vec![],
         simulation: None,
@@ -487,7 +493,7 @@ fn test_tx_report_sat_contract() {
         Some(&payer.pubkey()),
         &recent_blockhash,
     ));
-    let tx = VersionedTransaction { signatures: vec![payer.sign_message(&message.serialize()).into()], message };
+    let tx = VersionedTransaction { signatures: vec![payer.sign_message(&message.serialize())], message };
     let serialized = bincode::serialize(&tx).unwrap();
 
     let idl = IdlJson {
@@ -536,11 +542,11 @@ fn test_tx_report_sat_contract() {
     assert_eq!(sat.instructions[0].name, "transfer_tokens");
     assert_eq!(sat.instructions[0].accounts.len(), 3);
     assert_eq!(sat.instructions[0].accounts[0].name, "from");
-    assert_eq!(sat.instructions[0].accounts[0].is_writable, true);
+    assert!(sat.instructions[0].accounts[0].is_writable);
     assert_eq!(sat.instructions[0].accounts[1].name, "authority");
     // Authority is a non-signer in the tx while the IDL declares isSigner=true:
     // sat's correlation must be able to see this mismatch.
-    assert_eq!(sat.instructions[0].accounts[1].is_signer, false);
+    assert!(!sat.instructions[0].accounts[1].is_signer);
     let pda = sat.instructions[0].accounts[2].pda_info.as_ref().expect("vault pda_info");
     assert!(pda.seeds_declared.iter().any(|s| s.contains("vault")));
     assert_eq!(pda.bump, Some(bump));
@@ -614,8 +620,9 @@ fn system_transfer_instruction(from: &Pubkey, to: &Pubkey, lamports: u64) -> Ins
 }
 
 fn set_compute_unit_limit_instruction(limit: u32) -> Instruction {
+    // On-chain tag 2 = SetComputeUnitLimit (1 is RequestHeapFrame).
     let mut data = vec![0u8; 5];
-    data[0] = 1;
+    data[0] = 2;
     data[1..5].copy_from_slice(&limit.to_le_bytes());
     Instruction {
         program_id: Pubkey::from_str("ComputeBudget111111111111111111111111111111").unwrap(),
@@ -661,15 +668,15 @@ fn generate_fixtures() {
         Some(&from.pubkey()),
         &recent_blockhash,
     ));
-    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize())], message };
     let serialized = bincode::serialize(&tx).unwrap();
-    write_fixture("tests/fixtures/system_transfer.hex", &hex::encode(&serialized));
+    write_fixture("tests/fixtures/system_transfer.hex", hex::encode(&serialized));
     write_fixture("tests/fixtures/system_transfer.bin", &serialized);
-    write_fixture("tests/fixtures/system_transfer.base58", &bs58::encode(&serialized).into_string());
+    write_fixture("tests/fixtures/system_transfer.base58", bs58::encode(&serialized).into_string());
     use base64::Engine;
     write_fixture(
         "tests/fixtures/system_transfer.base64",
-        &base64::engine::general_purpose::STANDARD.encode(&serialized),
+        base64::engine::general_purpose::STANDARD.encode(&serialized),
     );
 
     // v0 transaction
@@ -681,8 +688,8 @@ fn generate_fixtures() {
     )
     .unwrap();
     let message = VersionedMessage::V0(v0_msg);
-    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
-    write_fixture("tests/fixtures/v0_transfer.hex", &hex::encode(&bincode::serialize(&tx).unwrap()));
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize())], message };
+    write_fixture("tests/fixtures/v0_transfer.hex", hex::encode(bincode::serialize(&tx).unwrap()));
 
     // Compute budget + transfer
     let cu_limit_ix = set_compute_unit_limit_instruction(150_000);
@@ -693,8 +700,8 @@ fn generate_fixtures() {
         Some(&from.pubkey()),
         &recent_blockhash,
     ));
-    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
-    write_fixture("tests/fixtures/compute_budget_transfer.hex", &hex::encode(&bincode::serialize(&tx).unwrap()));
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize())], message };
+    write_fixture("tests/fixtures/compute_budget_transfer.hex", hex::encode(bincode::serialize(&tx).unwrap()));
 }
 
 /// Decode the committed legacy transfer fixture and verify structure.
@@ -768,7 +775,7 @@ fn test_validate_decoding_legacy_150_accounts() {
         &recent_blockhash,
     ));
     let keypair = Keypair::new();
-    let tx = VersionedTransaction { signatures: vec![keypair.sign_message(&message.serialize()).into()], message };
+    let tx = VersionedTransaction { signatures: vec![keypair.sign_message(&message.serialize())], message };
     let serialized = bincode::serialize(&tx).unwrap();
 
     let report = decoder::decode_raw_bytes(&serialized, None).expect("Decode legacy 150-account tx");
@@ -805,7 +812,7 @@ fn test_validate_decoding_v0_with_alt() {
 
     let msg = v0::Message::try_compile(&payer.pubkey(), &[ix], &[alt], recent_blockhash).unwrap();
     let tx = VersionedTransaction {
-        signatures: vec![payer.sign_message(&msg.serialize()).into()],
+        signatures: vec![payer.sign_message(&msg.serialize())],
         message: VersionedMessage::V0(msg),
     };
     let serialized = bincode::serialize(&tx).unwrap();
@@ -834,8 +841,8 @@ fn create_account_instruction(from: &Pubkey, to: &Pubkey, lamports: u64, space: 
     }
 }
 
-/// Verify that high-CU instructions (CreateAccount, 15k CU) are flagged
-/// when they exceed the dynamic threshold.
+// Verify that high-CU instructions (CreateAccount, 15k CU) are flagged
+// when they exceed the dynamic threshold.
 // ── IDL Account Count Consistency Tests ──────────────────────────────────────
 
 fn make_single_account_idl() -> IdlJson {
@@ -880,6 +887,7 @@ fn test_idl_account_count_mismatch_flag() {
         ],
         data: serde_json::Value::Null,
         raw_data_hex: String::new(),
+        token_amount: None,
     });
 
     validator::validate(&mut report, Some(&idl));
@@ -904,6 +912,7 @@ fn test_idl_account_count_ok() {
         ],
         data: serde_json::Value::Null,
         raw_data_hex: String::new(),
+        token_amount: None,
     });
 
     validator::validate(&mut report, Some(&idl));
@@ -960,7 +969,7 @@ fn test_token_2022_instruction_names() {
     assert_eq!(name.as_deref(), Some("UpdateTransferHook"));
 
     // Extension-type payloads decode as u16 lists.
-    let (name, decoded) = decode_instruction_data(t22, &vec![28, 1, 0, 0, 0, 1, 0], None);
+    let (name, decoded) = decode_instruction_data(t22, &[28, 1, 0, 0, 0, 1, 0], None);
     assert_eq!(name.as_deref(), Some("DefaultAccountStateExtension"));
     assert_eq!(decoded, serde_json::json!({"extension_types": [1]}));
 
@@ -986,8 +995,8 @@ fn test_high_cu_instruction_detection() {
         &recent_blockhash,
     ));
 
-    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
-    let hex_encoded = hex::encode(&bincode::serialize(&tx).unwrap());
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize())], message };
+    let hex_encoded = hex::encode(bincode::serialize(&tx).unwrap());
 
     let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode CU+CreateAccount tx");
     let cb = report.compute_budget.expect("Should have compute budget info");
@@ -1014,8 +1023,8 @@ fn test_cb_after_transfer_flagged_reordered() {
         Some(&from.pubkey()),
         &recent_blockhash,
     ));
-    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
-    let hex_encoded = hex::encode(&bincode::serialize(&tx).unwrap());
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize())], message };
+    let hex_encoded = hex::encode(bincode::serialize(&tx).unwrap());
 
     let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode CB-after-transfer tx");
     let cb = report.compute_budget.expect("Should have compute budget info");
@@ -1039,8 +1048,8 @@ fn test_cb_injected_mid_transaction_flagged() {
         Some(&from.pubkey()),
         &recent_blockhash,
     ));
-    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
-    let hex_encoded = hex::encode(&bincode::serialize(&tx).unwrap());
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize())], message };
+    let hex_encoded = hex::encode(bincode::serialize(&tx).unwrap());
 
     let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode mid-injected CB tx");
     let cb = report.compute_budget.expect("Should have compute budget info");
@@ -1059,6 +1068,7 @@ fn test_no_cu_reorder_for_prefix_positions() {
         compute_budget_positions: vec![0, 1],
         is_reordered: false,
         high_cu_instructions: vec![],
+        priority_fee_lamports: 0,
     });
     validator::validate(&mut report, None);
     assert!(!report.risk_flags.iter().any(|f| f.category == RiskCategory::ComputeBudgetReordering));
@@ -1075,6 +1085,7 @@ fn test_cu_reorder_flag_on_gap_position() {
         compute_budget_positions: vec![0, 2],
         is_reordered: true,
         high_cu_instructions: vec![],
+        priority_fee_lamports: 0,
     });
     validator::validate(&mut report, None);
     let reorder_flags: Vec<_> =
@@ -1095,6 +1106,7 @@ fn test_cu_reorder_flag_single_mid_tx() {
         compute_budget_positions: vec![1],
         is_reordered: true,
         high_cu_instructions: vec![],
+        priority_fee_lamports: 0,
     });
     validator::validate(&mut report, None);
     assert!(report.risk_flags.iter().any(|f| f.category == RiskCategory::ComputeBudgetReordering));
@@ -1111,6 +1123,7 @@ fn test_cu_reorder_message_describes_prefix_rule() {
         compute_budget_positions: vec![2],
         is_reordered: true,
         high_cu_instructions: vec![],
+        priority_fee_lamports: 0,
     });
     validator::validate(&mut report, None);
     let flag = report

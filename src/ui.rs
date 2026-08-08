@@ -40,6 +40,11 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
         println!("[+] Compute Limit: {}", limit_label);
         if cb.compute_unit_price > 0 {
             println!("[+] Priority Fee: {} micro-lamports/CU", cb.compute_unit_price);
+            println!(
+                "[+] Priority Fee Total: {} lamports (≈ {:.6} SOL, worst case at the CU limit)",
+                cb.priority_fee_lamports,
+                cb.priority_fee_lamports as f64 / 1e9
+            );
         }
     }
 
@@ -126,6 +131,10 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
             }
         } else if !ix.raw_data_hex.is_empty() {
             println!("│   └── Raw Data: {}", ix.raw_data_hex.dimmed());
+        }
+
+        if let Some(ta) = &ix.token_amount {
+            println!("│   └── Token Amount: {} (raw {}, {} decimals)", ta.human, ta.raw, ta.decimals);
         }
     }
     println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());

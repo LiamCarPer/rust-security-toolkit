@@ -92,43 +92,95 @@ fn decode_system_instruction(data: &[u8]) -> (Option<String>, serde_json::Value)
         7 if data.len() >= 36 => {
             let authorized =
                 Pubkey::try_from(&data[4..36]).map(|k| k.to_string()).unwrap_or_else(|_| "invalid".to_string());
-            (Some("ResizeNonceAccount".into()), serde_json::json!({ "authorized": authorized }))
-        }
-        8 if data.len() >= 36 => {
-            let authorized =
-                Pubkey::try_from(&data[4..36]).map(|k| k.to_string()).unwrap_or_else(|_| "invalid".to_string());
             (Some("AuthorizeNonceAccount".into()), serde_json::json!({ "authorized": authorized }))
         }
-        9 if data.len() >= 12 => {
+        8 if data.len() >= 12 => {
             let space = u64::from_le_bytes(data[4..12].try_into().unwrap());
             (Some("Allocate".into()), serde_json::json!({ "space": space }))
         }
-        10 => {
+        9 => {
+            // AllocateWithSeed { base, seed: String, space, owner } in bincode order.
             let mut map = serde_json::Map::new();
-            if data.len() > 36
+            if data.len() >= 36
                 && let Ok(base) = Pubkey::try_from(&data[4..36])
             {
                 map.insert("base".into(), serde_json::Value::String(base.to_string()));
             }
-            if data.len() > 68 {
-                map.insert("space".into(), serde_json::json!(u64::from_le_bytes(data[36..44].try_into().unwrap())));
-                if let Ok(owner) = Pubkey::try_from(&data[44..76]) {
-                    map.insert("owner".into(), serde_json::Value::String(owner.to_string()));
+            if data.len() >= 44 {
+                let seed_len = u64::from_le_bytes(data[36..44].try_into().unwrap()) as usize;
+                let seed_end = 44usize.saturating_add(seed_len);
+                if data.len() >= seed_end {
+                    map.insert(
+                        "seed".into(),
+                        serde_json::Value::String(String::from_utf8_lossy(&data[44..seed_end]).into_owned()),
+                    );
+                    if data.len() >= seed_end.saturating_add(8) {
+                        map.insert(
+                            "space".into(),
+                            serde_json::json!(u64::from_le_bytes(data[seed_end..seed_end + 8].try_into().unwrap())),
+                        );
+                        if let Ok(owner) = Pubkey::try_from(&data[seed_end + 8..seed_end + 40]) {
+                            map.insert("owner".into(), serde_json::Value::String(owner.to_string()));
+                        }
+                    }
                 }
             }
             (Some("AllocateWithSeed".into()), serde_json::Value::Object(map))
         }
-        11 => {
+        10 => {
+            // AssignWithSeed { base, seed: String, owner } in bincode order.
             let mut map = serde_json::Map::new();
-            if data.len() > 36
+            if data.len() >= 36
                 && let Ok(base) = Pubkey::try_from(&data[4..36])
             {
                 map.insert("base".into(), serde_json::Value::String(base.to_string()));
             }
-            if let Ok(owner) = Pubkey::try_from(&data[36..68]) {
-                map.insert("owner".into(), serde_json::Value::String(owner.to_string()));
+            if data.len() >= 44 {
+                let seed_len = u64::from_le_bytes(data[36..44].try_into().unwrap()) as usize;
+                let seed_end = 44usize.saturating_add(seed_len);
+                if data.len() >= seed_end {
+                    map.insert(
+                        "seed".into(),
+                        serde_json::Value::String(String::from_utf8_lossy(&data[44..seed_end]).into_owned()),
+                    );
+                    if let Ok(owner) = Pubkey::try_from(&data[seed_end..seed_end + 32]) {
+                        map.insert("owner".into(), serde_json::Value::String(owner.to_string()));
+                    }
+                }
             }
             (Some("AssignWithSeed".into()), serde_json::Value::Object(map))
+        }
+        11 => {
+            // TransferWithSeed { lamports, from_seed: String, from_owner } in bincode order.
+            let mut map = serde_json::Map::new();
+            if data.len() >= 12 {
+                map.insert("lamports".into(), serde_json::json!(u64::from_le_bytes(data[4..12].try_into().unwrap())));
+            }
+            if data.len() >= 20 {
+                let seed_len = u64::from_le_bytes(data[12..20].try_into().unwrap()) as usize;
+                let seed_end = 20usize.saturating_add(seed_len);
+                if data.len() >= seed_end {
+                    map.insert(
+                        "from_seed".into(),
+                        serde_json::Value::String(String::from_utf8_lossy(&data[20..seed_end]).into_owned()),
+                    );
+                    if let Ok(from_owner) = Pubkey::try_from(&data[seed_end..seed_end + 32]) {
+                        map.insert("from_owner".into(), serde_json::Value::String(from_owner.to_string()));
+                    }
+                }
+            }
+            (Some("TransferWithSeed".into()), serde_json::Value::Object(map))
+        }
+        12 => (Some("UpgradeNonceAccount".into()), serde_json::Value::Null),
+        13 if data.len() >= 52 => {
+            let lamports = u64::from_le_bytes(data[4..12].try_into().unwrap());
+            let space = u64::from_le_bytes(data[12..20].try_into().unwrap());
+            let owner =
+                Pubkey::try_from(&data[20..52]).map(|k| k.to_string()).unwrap_or_else(|_| "invalid".to_string());
+            (
+                Some("CreateAccountAllowPrefund".into()),
+                serde_json::json!({ "lamports": lamports, "space": space, "owner": owner }),
+            )
         }
         _ => (None, serde_json::Value::String(hex::encode(data))),
     }
@@ -506,18 +558,216 @@ fn decode_associated_token_instruction(data: &[u8]) -> (Option<String>, serde_js
 
 fn decode_compute_budget_instruction(data: &[u8]) -> (Option<String>, serde_json::Value) {
     match data.first() {
-        Some(0) if data.len() >= 5 => {
-            let limit = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
-            (Some("RequestUnits".into()), serde_json::json!({ "units": limit, "additional_fee": 0 }))
+        Some(0) if data.len() >= 9 => {
+            let units = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
+            let additional_fee = u32::from_le_bytes([data[5], data[6], data[7], data[8]]);
+            (Some("RequestUnits".into()), serde_json::json!({ "units": units, "additional_fee": additional_fee }))
         }
         Some(1) if data.len() >= 5 => {
-            let limit = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
-            (Some("SetComputeUnitLimit".into()), serde_json::json!({ "units": limit }))
+            let bytes = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
+            (Some("RequestHeapFrame".into()), serde_json::json!({ "bytes": bytes }))
+        }
+        Some(2) if data.len() >= 5 => {
+            let units = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
+            (Some("SetComputeUnitLimit".into()), serde_json::json!({ "units": units }))
         }
         Some(3) if data.len() >= 9 => {
             let price = u64::from_le_bytes([data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8]]);
             (Some("SetComputeUnitPrice".into()), serde_json::json!({ "micro_lamports": price }))
         }
+        Some(4) if data.len() >= 5 => {
+            let bytes = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
+            (Some("SetLoadedAccountsDataSizeLimit".into()), serde_json::json!({ "bytes": bytes }))
+        }
         _ => (None, serde_json::Value::String(hex::encode(data))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use solana_address::Address;
+    use solana_system_interface::instruction::SystemInstruction;
+
+    use super::decode_instruction_data;
+    use crate::types::{COMPUTE_BUDGET_PROGRAM_ID, SYSTEM_PROGRAM_ID};
+
+    /// Base58 keys with distinctive bytes so decoding mistakes (byte order, offsets) surface.
+    fn key_a() -> Address {
+        Address::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap()
+    }
+
+    fn key_b() -> Address {
+        Address::from_str("So11111111111111111111111111111111111111112").unwrap()
+    }
+
+    /// Bincode-serialize a real SDK `SystemInstruction` and run it through the decoder.
+    fn decode_system(ix: &SystemInstruction) -> (Option<String>, serde_json::Value) {
+        let data = bincode::serialize(ix).unwrap();
+        decode_instruction_data(SYSTEM_PROGRAM_ID, &data, None)
+    }
+
+    #[test]
+    fn system_authorize_nonce_account_round_trip() {
+        let (name, decoded) = decode_system(&SystemInstruction::AuthorizeNonceAccount(key_a()));
+        assert_eq!(name.as_deref(), Some("AuthorizeNonceAccount"));
+        assert_eq!(decoded["authorized"], key_a().to_string());
+    }
+
+    #[test]
+    fn system_allocate_round_trip() {
+        let (name, decoded) = decode_system(&SystemInstruction::Allocate { space: 4096 });
+        assert_eq!(name.as_deref(), Some("Allocate"));
+        assert_eq!(decoded["space"].as_u64(), Some(4096));
+    }
+
+    #[test]
+    fn system_allocate_with_seed_round_trip() {
+        let (name, decoded) = decode_system(&SystemInstruction::AllocateWithSeed {
+            base: key_a(),
+            seed: "seed".to_string(),
+            space: 5120,
+            owner: key_b(),
+        });
+        assert_eq!(name.as_deref(), Some("AllocateWithSeed"));
+        assert_eq!(decoded["base"], key_a().to_string());
+        assert_eq!(decoded["seed"], "seed");
+        assert_eq!(decoded["space"].as_u64(), Some(5120));
+        assert_eq!(decoded["owner"], key_b().to_string());
+    }
+
+    #[test]
+    fn system_assign_with_seed_round_trip() {
+        let (name, decoded) = decode_system(&SystemInstruction::AssignWithSeed {
+            base: key_a(),
+            seed: "seed".to_string(),
+            owner: key_b(),
+        });
+        assert_eq!(name.as_deref(), Some("AssignWithSeed"));
+        assert_eq!(decoded["base"], key_a().to_string());
+        assert_eq!(decoded["seed"], "seed");
+        assert_eq!(decoded["owner"], key_b().to_string());
+    }
+
+    #[test]
+    fn system_transfer_with_seed_round_trip() {
+        let (name, decoded) = decode_system(&SystemInstruction::TransferWithSeed {
+            lamports: 99,
+            from_seed: "seed".to_string(),
+            from_owner: key_b(),
+        });
+        assert_eq!(name.as_deref(), Some("TransferWithSeed"));
+        assert_eq!(decoded["lamports"].as_u64(), Some(99));
+        assert_eq!(decoded["from_seed"], "seed");
+        assert_eq!(decoded["from_owner"], key_b().to_string());
+    }
+
+    #[test]
+    fn system_transfer_with_seed_truncated_skips_missing_fields() {
+        let mut data = bincode::serialize(&SystemInstruction::TransferWithSeed {
+            lamports: 99,
+            from_seed: "seed".to_string(),
+            from_owner: key_b(),
+        })
+        .unwrap();
+        data.truncate(20); // keep discriminant + lamports + seed length prefix only
+        let (name, decoded) = decode_instruction_data(SYSTEM_PROGRAM_ID, &data, None);
+        assert_eq!(name.as_deref(), Some("TransferWithSeed"));
+        assert_eq!(decoded["lamports"].as_u64(), Some(99));
+        assert!(decoded.get("from_seed").is_none());
+        assert!(decoded.get("from_owner").is_none());
+    }
+
+    #[test]
+    fn system_upgrade_nonce_account_round_trip() {
+        let (name, decoded) = decode_system(&SystemInstruction::UpgradeNonceAccount);
+        assert_eq!(name.as_deref(), Some("UpgradeNonceAccount"));
+        assert!(decoded.is_null());
+    }
+
+    #[test]
+    fn system_create_account_allow_prefund_round_trip() {
+        let (name, decoded) = decode_system(&SystemInstruction::CreateAccountAllowPrefund {
+            lamports: 1_000_000,
+            space: 128,
+            owner: key_a(),
+        });
+        assert_eq!(name.as_deref(), Some("CreateAccountAllowPrefund"));
+        assert_eq!(decoded["lamports"].as_u64(), Some(1_000_000));
+        assert_eq!(decoded["space"].as_u64(), Some(128));
+        assert_eq!(decoded["owner"], key_a().to_string());
+    }
+
+    #[test]
+    fn system_advance_nonce_account_regression() {
+        let (name, decoded) = decode_system(&SystemInstruction::AdvanceNonceAccount);
+        assert_eq!(name.as_deref(), Some("AdvanceNonceAccount"));
+        assert!(decoded.is_null());
+    }
+
+    #[test]
+    fn system_create_account_regression() {
+        let (name, decoded) =
+            decode_system(&SystemInstruction::CreateAccount { lamports: 42, space: 64, owner: key_a() });
+        assert_eq!(name.as_deref(), Some("CreateAccount"));
+        assert_eq!(decoded["lamports"].as_u64(), Some(42));
+        assert_eq!(decoded["space"].as_u64(), Some(64));
+        assert_eq!(decoded["owner"], key_a().to_string());
+    }
+
+    /// `ComputeBudgetInstruction` is not reachable from any crate in the pinned tree
+    /// (solana-sdk 4.0.1 has no compute_budget module and solana-compute-budget-interface
+    /// is absent from Cargo.lock), so build the on-chain bytes by hand: 1-byte tag
+    /// followed by little-endian payload, matching the decoder (and the on-chain format).
+    fn decode_compute_budget(data: &[u8]) -> (Option<String>, serde_json::Value) {
+        decode_instruction_data(COMPUTE_BUDGET_PROGRAM_ID, data, None)
+    }
+
+    #[test]
+    fn compute_budget_request_units_round_trip() {
+        let mut data = vec![0u8];
+        data.extend_from_slice(&200_000u32.to_le_bytes());
+        data.extend_from_slice(&5u32.to_le_bytes());
+        let (name, decoded) = decode_compute_budget(&data);
+        assert_eq!(name.as_deref(), Some("RequestUnits"));
+        assert_eq!(decoded["units"].as_u64(), Some(200_000));
+        assert_eq!(decoded["additional_fee"].as_u64(), Some(5));
+    }
+
+    #[test]
+    fn compute_budget_request_heap_frame_round_trip() {
+        let mut data = vec![1u8];
+        data.extend_from_slice(&131_072u32.to_le_bytes());
+        let (name, decoded) = decode_compute_budget(&data);
+        assert_eq!(name.as_deref(), Some("RequestHeapFrame"));
+        assert_eq!(decoded["bytes"].as_u64(), Some(131_072));
+    }
+
+    #[test]
+    fn compute_budget_set_compute_unit_limit_round_trip() {
+        let mut data = vec![2u8];
+        data.extend_from_slice(&1_400_000u32.to_le_bytes());
+        let (name, decoded) = decode_compute_budget(&data);
+        assert_eq!(name.as_deref(), Some("SetComputeUnitLimit"));
+        assert_eq!(decoded["units"].as_u64(), Some(1_400_000));
+    }
+
+    #[test]
+    fn compute_budget_set_compute_unit_price_round_trip() {
+        let mut data = vec![3u8];
+        data.extend_from_slice(&123_456_789u64.to_le_bytes());
+        let (name, decoded) = decode_compute_budget(&data);
+        assert_eq!(name.as_deref(), Some("SetComputeUnitPrice"));
+        assert_eq!(decoded["micro_lamports"].as_u64(), Some(123_456_789));
+    }
+
+    #[test]
+    fn compute_budget_set_loaded_accounts_data_size_limit_round_trip() {
+        let mut data = vec![4u8];
+        data.extend_from_slice(&64_512u32.to_le_bytes());
+        let (name, decoded) = decode_compute_budget(&data);
+        assert_eq!(name.as_deref(), Some("SetLoadedAccountsDataSizeLimit"));
+        assert_eq!(decoded["bytes"].as_u64(), Some(64_512));
     }
 }

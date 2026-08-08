@@ -28,6 +28,10 @@ pub fn decode_anchor_args(data: &[u8], args: &[IdlArg]) -> serde_json::Value {
         }
         let (value, consumed) = decode_anchor_type(data, offset, &arg.ty);
         map.insert(arg.name.clone(), value);
+        if consumed == 0 {
+            // No progress possible — stop rather than loop forever.
+            break;
+        }
         offset += consumed;
     }
 
@@ -46,8 +50,15 @@ fn decode_anchor_type(data: &[u8], offset: usize, ty: &serde_json::Value) -> (se
                 let mut items = Vec::new();
                 let mut local_offset = offset;
                 for _ in 0..len {
+                    if local_offset >= data.len() {
+                        break;
+                    }
                     let (v, consumed) = decode_anchor_type(data, local_offset, &inner);
                     items.push(v);
+                    if consumed == 0 {
+                        // No progress possible — malformed or unreadable data.
+                        break;
+                    }
                     local_offset += consumed;
                 }
                 (serde_json::Value::Array(items), local_offset - offset)
@@ -57,8 +68,15 @@ fn decode_anchor_type(data: &[u8], offset: usize, ty: &serde_json::Value) -> (se
                     let mut items = Vec::new();
                     let mut local_offset = offset + 4;
                     for _ in 0..vec_len {
+                        if local_offset >= data.len() {
+                            break;
+                        }
                         let (v, consumed) = decode_anchor_type(data, local_offset, inner);
                         items.push(v);
+                        if consumed == 0 {
+                            // No progress possible — malformed or unreadable data.
+                            break;
+                        }
                         local_offset += consumed;
                     }
                     (serde_json::Value::Array(items), local_offset - offset)

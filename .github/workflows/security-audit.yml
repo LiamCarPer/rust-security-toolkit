@@ -3,16 +3,19 @@ name: Security Audit
 on:
   schedule:
     - cron: '0 8 * * 1'  # Every Monday at 8:00 UTC
+  workflow_dispatch: {}  # Manual runs from the Actions tab
   push:
     branches: [main]
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+      - '.github/workflows/security-audit.yml'
   pull_request:
     branches: [main]
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
+      - '.github/workflows/security-audit.yml'
 
 jobs:
   security-audit:
@@ -26,11 +29,18 @@ jobs:
       - uses: rustsec/audit-check@v1.4.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: cargo-geiger
-        run: |
-          cargo install cargo-geiger --locked
-          cargo geiger
+      # cargo-deny is the gating check: it fails the job on real issues
+      # (licenses, advisories, banned crates) via deny.toml.
       - name: cargo-deny
         run: |
           cargo install cargo-deny --locked
           cargo deny check
+      # cargo-geiger only reports unsafe-usage counts and is informational.
+      # It requires a nightly toolchain to build, so the workflow installs
+      # nightly and never lets this step block the pipeline.
+      - name: cargo-geiger
+        continue-on-error: true
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo +nightly install cargo-geiger --locked || cargo +nightly install cargo-geiger
+          cargo +nightly geiger

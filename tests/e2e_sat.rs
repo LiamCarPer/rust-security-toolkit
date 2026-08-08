@@ -77,7 +77,7 @@ fn e2e_sat_correlation_finds_signer_mismatch() {
     };
     let message =
         VersionedMessage::Legacy(legacy::Message::new_with_blockhash(&[ix], Some(&payer.pubkey()), &recent_blockhash));
-    let tx = VersionedTransaction { signatures: vec![payer.sign_message(&message.serialize()).into()], message };
+    let tx = VersionedTransaction { signatures: vec![payer.sign_message(&message.serialize())], message };
     let tx_hex = hex::encode(bincode::serialize(&tx).unwrap());
 
     // ── Write fixtures to a temp dir ─────────────────────────────────────────

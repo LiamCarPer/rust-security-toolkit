@@ -37,7 +37,7 @@ fn build_v0_alt_tx() -> (Vec<u8>, Vec<Pubkey>) {
 
     let msg = v0::Message::try_compile(&payer.pubkey(), &[ix], &[alt], recent_blockhash).unwrap();
     let tx = VersionedTransaction {
-        signatures: vec![payer.sign_message(&msg.serialize()).into()],
+        signatures: vec![payer.sign_message(&msg.serialize())],
         message: VersionedMessage::V0(msg),
     };
     (bincode::serialize(&tx).unwrap(), addresses)
@@ -176,7 +176,7 @@ async fn test_alt_resolution_no_lookups_skipped() {
         Some(&from.pubkey()),
         &recent_blockhash,
     ));
-    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize()).into()], message };
+    let tx = VersionedTransaction { signatures: vec![from.sign_message(&message.serialize())], message };
     let raw = bincode::serialize(&tx).unwrap();
     let mut report = decoder::decode_raw_bytes(&raw, None).expect("Decode legacy tx");
     assert!(report.address_lookup_tables.is_empty());

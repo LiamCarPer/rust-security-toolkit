@@ -87,7 +87,7 @@ fn tx_strategy() -> impl Strategy<Value = Vec<u8>> {
             };
 
             let tx =
-                VersionedTransaction { signatures: vec![payer.sign_message(&message.serialize()).into()], message };
+                VersionedTransaction { signatures: vec![payer.sign_message(&message.serialize())], message };
             bincode::serialize(&tx).unwrap()
         },
     )

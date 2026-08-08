@@ -12,7 +12,7 @@ mod cli_e2e_tests {
 
     fn read_fixture_hex(name: &str) -> String {
         let path = format!("tests/fixtures/{}", name);
-        std::fs::read_to_string(&path).expect(&format!("Fixture not found: {}", path))
+        std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("Fixture not found: {}", path))
     }
 
     /// Decode a legacy transfer fixture via the CLI with --json output.
@@ -27,7 +27,7 @@ mod cli_e2e_tests {
 
         let report: serde_json::Value = serde_json::from_str(&stdout).expect("rts --json output is not valid JSON");
         assert_eq!(report["status"], "DECODED SUCCESSFULLY");
-        assert!(report["instructions"].as_array().unwrap().len() >= 1);
+        assert!(!report["instructions"].as_array().unwrap().is_empty());
         assert_eq!(report["instructions"][0]["program_name"], "System Program");
     }
 
@@ -103,7 +103,7 @@ mod cli_e2e_tests {
         let report_json = std::fs::read_to_string(report_path).expect("Tx report file not written");
         let report: serde_json::Value = serde_json::from_str(&report_json).unwrap();
         assert_eq!(report["schema_version"], "1.0");
-        assert!(report["transaction"]["signatures"].as_array().unwrap().len() >= 1);
+        assert!(!report["transaction"]["signatures"].as_array().unwrap().is_empty());
         assert!(report["accounts"].as_array().unwrap().len() >= 2);
 
         // Cleanup

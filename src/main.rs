@@ -3,7 +3,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 use rust_security_toolkit::types::IdlJson;
-use rust_security_toolkit::{decoder, simulator, types, ui, validator};
+use rust_security_toolkit::{decoder, encoding, simulator, ui, validator};
 
 #[derive(Parser)]
 #[command(
@@ -52,24 +52,25 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let tx_input = match (cli.tx_input, &cli.file) {
+    // All input sources are read as bytes so raw binary transactions work
+    // from stdin and --file; encoding detection applies to UTF-8 text.
+    let input_bytes: Vec<u8> = match (cli.tx_input, &cli.file) {
         (Some(input), _) if input == "-" => {
             use std::io::Read;
-            let mut buffer = String::new();
-            std::io::stdin().read_to_string(&mut buffer).context("Failed to read transaction from stdin")?;
-            buffer.trim().to_string()
+            let mut buffer = Vec::new();
+            std::io::stdin().read_to_end(&mut buffer).context("Failed to read transaction from stdin")?;
+            buffer
         }
-        (Some(input), _) => input,
-        (None, Some(path)) => {
-            std::fs::read_to_string(path).context("Failed to read transaction file")?.trim().to_string()
-        }
+        (Some(input), _) => input.into_bytes(),
+        (None, Some(path)) => std::fs::read(path).context("Failed to read transaction file")?,
         (None, None) => {
             eprintln!("Error: No transaction input provided. Use TX_BYTES, --file, or pipe via stdin.");
             std::process::exit(1);
         }
     };
 
-    if tx_input.is_empty() {
+    let raw_bytes_decoded = encoding::decode_input_bytes(&input_bytes)?;
+    if raw_bytes_decoded.is_empty() {
         anyhow::bail!("Transaction input is empty");
     }
 
@@ -79,20 +80,6 @@ async fn main() -> Result<()> {
             Some(serde_json::from_str(&contents).context("Failed to parse IDL JSON")?)
         }
         None => None,
-    };
-
-    let encoding = decoder::detect_encoding(&tx_input);
-    let raw_bytes_decoded = {
-        use base64::Engine;
-        let trimmed = tx_input.trim();
-        match encoding {
-            types::Encoding::Base58 => bs58::decode(trimmed).into_vec().context("Failed to decode Base58 input")?,
-            types::Encoding::Base64 => {
-                base64::engine::general_purpose::STANDARD.decode(trimmed).context("Failed to decode Base64 input")?
-            }
-            types::Encoding::Hex => hex::decode(trimmed).context("Failed to decode Hex input")?,
-            types::Encoding::Raw => trimmed.as_bytes().to_vec(),
-        }
     };
 
     let mut report = decoder::decode_raw_bytes(&raw_bytes_decoded, idl.as_ref())?;
@@ -131,6 +118,10 @@ async fn main() -> Result<()> {
         // Dynamic program verification: ownership + verified build registry
         let prog_flags = simulator::verify_programs(rpc_url, &report).await;
         report.risk_flags.extend(prog_flags);
+
+        // Resolve address lookup table pubkeys on-chain (v0 transactions)
+        let alt_flags = simulator::resolve_address_lookup_tables(rpc_url, &mut report).await;
+        report.risk_flags.extend(alt_flags);
     }
 
     if let Some(ref output_path) = cli.output_tx_report {

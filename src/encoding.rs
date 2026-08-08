@@ -46,3 +46,16 @@ pub fn decode_from_encoding(input: &str, encoding: Encoding) -> Result<Vec<u8>> 
         Encoding::Raw => Ok(trimmed.as_bytes().to_vec()),
     }
 }
+
+/// Decode a transaction input that may be text (Base58, Base64, Hex) or raw
+/// binary bytes. Valid UTF-8 inputs go through encoding detection; anything
+/// else is treated as raw transaction bytes and returned untouched.
+pub fn decode_input_bytes(input: &[u8]) -> Result<Vec<u8>> {
+    if let Ok(text) = std::str::from_utf8(input) {
+        let trimmed = text.trim();
+        let encoding = detect_encoding(trimmed);
+        decode_from_encoding(trimmed, encoding)
+    } else {
+        Ok(input.to_vec())
+    }
+}

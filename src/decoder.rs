@@ -95,6 +95,7 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
                     index_in_tx: global_idx as u8,
                     pubkey: format!("<alt_index_{}>", idx),
                     is_writable: true,
+                    table_index: Some(*idx),
                 });
             }
             for idx in &alt.readonly_indexes {
@@ -104,11 +105,15 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
                     index_in_tx: global_idx as u8,
                     pubkey: format!("<alt_index_{}>", idx),
                     is_writable: false,
+                    table_index: Some(*idx),
                 });
             }
 
-            address_lookup_tables
-                .push(AltResolution { table_address: alt.account_key.to_string(), resolved_accounts: resolved });
+            address_lookup_tables.push(AltResolution {
+                table_address: alt.account_key.to_string(),
+                resolved_accounts: resolved,
+                resolved: false,
+            });
         }
     }
 

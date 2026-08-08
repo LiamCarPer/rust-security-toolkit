@@ -20,7 +20,12 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
         let sim_status = if sim.success {
             format!("WOULD SUCCEED ({} CU consumed)", sim.units_consumed).green()
         } else {
-            format!("WOULD FAIL: {}", sim.error.as_deref().unwrap_or("unknown")).red()
+            let detail = match (&sim.error_code, sim.error_instruction_index) {
+                (Some(code), Some(idx)) => format!("{} at instruction #{}", code, idx),
+                (Some(code), None) => code.clone(),
+                _ => sim.error.clone().unwrap_or_else(|| "unknown".to_string()),
+            };
+            format!("WOULD FAIL: {}", detail).red()
         };
         println!("[+] Simulation: {}", sim_status);
     }
@@ -57,11 +62,14 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
         println!();
         println!("{}", "┌── Address Lookup Table (ALT) Resolution ───────────────────────────────────────┐".bold());
         for alt in &report.address_lookup_tables {
+            let resolved_label =
+                if alt.resolved { "".to_string() } else { " (unresolved — run with --rpc)".yellow().to_string() };
             println!(
-                "│ Table: {} ({} account{})",
+                "│ Table: {} ({} account{}){}",
                 truncate_key(&alt.table_address),
                 alt.resolved_accounts.len(),
-                if alt.resolved_accounts.len() == 1 { "" } else { "s" }
+                if alt.resolved_accounts.len() == 1 { "" } else { "s" },
+                resolved_label
             );
             for resolved in &alt.resolved_accounts {
                 let writable = if resolved.is_writable { "Writable".yellow() } else { "Read-only".dimmed() };
@@ -233,8 +241,23 @@ pub fn render_tx_report(report: &TransactionReport) -> String {
                 "success": s.success,
                 "error": s.error,
                 "units_consumed": s.units_consumed,
+                "error_code": s.error_code,
+                "error_instruction_index": s.error_instruction_index,
             })
         }),
+        "address_lookup_tables": report.address_lookup_tables.iter().map(|alt| {
+            serde_json::json!({
+                "table_address": alt.table_address,
+                "resolved": alt.resolved,
+                "resolved_accounts": alt.resolved_accounts.iter().map(|r| {
+                    serde_json::json!({
+                        "index_in_tx": r.index_in_tx,
+                        "pubkey": r.pubkey,
+                        "is_writable": r.is_writable,
+                    })
+                }).collect::<Vec<_>>(),
+            })
+        }).collect::<Vec<_>>(),
     });
 
     serde_json::to_string_pretty(&sat_report).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))

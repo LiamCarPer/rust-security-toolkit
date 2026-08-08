@@ -52,6 +52,41 @@ struct RpcSimulateConfig {
     commitment: String,
 }
 
+/// Extract a structured error code and failing instruction index from a
+/// `simulateTransaction` `err` value. Recognized shapes:
+/// - `{"InstructionError": [idx, "Code"]}` → ("Code", idx)
+/// - `{"InstructionError": [idx, {"Custom": n}]}` → ("Custom(n)", idx)
+/// - `{"InsufficientFundsForFee": {}}` → ("InsufficientFundsForFee", None)
+/// - anything else → (None, None)
+pub fn parse_simulation_error(err: &serde_json::Value) -> (Option<String>, Option<u8>) {
+    let obj = match err.as_object() {
+        Some(o) => o,
+        None => return (None, None),
+    };
+
+    if let Some(ix_err) = obj.get("InstructionError") {
+        let arr = match ix_err.as_array() {
+            Some(a) => a,
+            None => return (Some("InstructionError".to_string()), None),
+        };
+        let instruction_index = arr.first().and_then(|v| v.as_u64()).map(|i| i as u8);
+        let code = match arr.get(1) {
+            Some(serde_json::Value::String(s)) => Some(s.clone()),
+            Some(serde_json::Value::Object(m)) => {
+                if let Some(custom) = m.get("Custom") {
+                    Some(custom.as_u64().map(|n| format!("Custom({})", n)).unwrap_or_else(|| "Custom".to_string()))
+                } else {
+                    m.keys().next().cloned()
+                }
+            }
+            _ => None,
+        };
+        return (code, instruction_index);
+    }
+
+    (obj.keys().next().cloned(), None)
+}
+
 /// Simulate a transaction against an RPC endpoint.
 pub async fn simulate_transaction(rpc_url: &str, raw_tx_base64: &str) -> Result<SimulationResult> {
     let client = reqwest::Client::new();
@@ -89,6 +124,8 @@ pub async fn simulate_transaction(rpc_url: &str, raw_tx_base64: &str) -> Result<
             logs: Vec::new(),
             units_consumed: 0,
             return_data: None,
+            error_code: None,
+            error_instruction_index: None,
         });
     }
 
@@ -101,11 +138,14 @@ pub async fn simulate_transaction(rpc_url: &str, raw_tx_base64: &str) -> Result<
                 logs: Vec::new(),
                 units_consumed: 0,
                 return_data: None,
+                error_code: None,
+                error_instruction_index: None,
             });
         }
     };
 
     let success = value.err.is_none();
+    let (error_code, error_instruction_index) = value.err.as_ref().map(parse_simulation_error).unwrap_or((None, None));
     let error = value.err.map(|e| e.to_string());
     let logs = value.logs.unwrap_or_default();
     let units_consumed = value.units_consumed.unwrap_or(0);
@@ -114,7 +154,173 @@ pub async fn simulate_transaction(rpc_url: &str, raw_tx_base64: &str) -> Result<
         .return_data
         .and_then(|rd| rd.get("data").and_then(|d| d.get(0)).and_then(|d| d.as_str()).map(String::from));
 
-    Ok(SimulationResult { success, error, logs, units_consumed, return_data })
+    Ok(SimulationResult { success, error, logs, units_consumed, return_data, error_code, error_instruction_index })
+}
+
+// ── Address Lookup Table Resolution ─────────────────────────────────────────
+
+#[derive(Serialize)]
+struct GetAltRequest {
+    jsonrpc: String,
+    id: u32,
+    method: String,
+    params: (String, GetAltConfig),
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GetAltConfig {
+    encoding: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetAltResponse {
+    result: Option<GetAltResult>,
+    error: Option<RpcError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetAltResult {
+    value: Option<GetAltValue>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetAltValue {
+    data: GetAltData,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GetAltData {
+    addresses: Vec<String>,
+}
+
+/// Resolve the address lookup tables referenced by a v0 transaction via RPC,
+/// replacing `<alt_index_N>` placeholders with the actual on-chain pubkeys.
+///
+/// Findings are returned as `AltIntegrity` risk flags:
+/// - table not found on chain (likely closed) → Warning
+/// - RPC/parse failure → Info (resolution skipped, placeholders retained)
+/// - a referenced table index out of bounds → Warning
+///
+/// Tables are fetched once per unique table address.
+pub async fn resolve_address_lookup_tables(rpc_url: &str, report: &mut TransactionReport) -> Vec<RiskFlag> {
+    let mut flags = Vec::new();
+    if report.address_lookup_tables.is_empty() {
+        return flags;
+    }
+
+    let client = reqwest::Client::new();
+    let mut cache: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+    for alt in &mut report.address_lookup_tables {
+        let table_address = alt.table_address.clone();
+
+        let addresses = if let Some(addrs) = cache.get(&table_address) {
+            addrs.clone()
+        } else {
+            match fetch_lookup_table_addresses(&client, rpc_url, &table_address).await {
+                Ok(Some(addrs)) => {
+                    cache.insert(table_address.clone(), addrs.clone());
+                    addrs
+                }
+                Ok(None) => {
+                    flags.push(RiskFlag {
+                        severity: RiskSeverity::Warning,
+                        category: RiskCategory::AltIntegrity,
+                        instruction_index: None,
+                        message: format!(
+                            "ALT Integrity: lookup table '{}' was not found on chain. \
+                             The table may be closed.",
+                            table_address
+                        ),
+                        details: "The referenced address lookup table no longer exists on-chain. \
+                                  Transactions using a closed table fail with an invalid lookup error."
+                            .to_string(),
+                    });
+                    continue;
+                }
+                Err(e) => {
+                    flags.push(RiskFlag {
+                        severity: RiskSeverity::Info,
+                        category: RiskCategory::AltIntegrity,
+                        instruction_index: None,
+                        message: format!("Could not resolve address lookup table '{}'", table_address),
+                        details: format!("RPC error: {}", e),
+                    });
+                    continue;
+                }
+            }
+        };
+
+        let mut out_of_bounds: Vec<u8> = Vec::new();
+        for resolved in &mut alt.resolved_accounts {
+            match resolved.table_index {
+                Some(idx) => match addresses.get(idx as usize) {
+                    Some(pk) => resolved.pubkey = pk.clone(),
+                    None => out_of_bounds.push(idx),
+                },
+                None => { /* no table index recorded — keep the placeholder */ }
+            }
+        }
+        alt.resolved = true;
+
+        for idx in out_of_bounds {
+            flags.push(RiskFlag {
+                severity: RiskSeverity::Warning,
+                category: RiskCategory::AltIntegrity,
+                instruction_index: None,
+                message: format!(
+                    "ALT Integrity: lookup table '{}' has no account at index {} ({} addresses on chain)",
+                    table_address,
+                    idx,
+                    addresses.len()
+                ),
+                details: "The transaction references an address beyond the table's on-chain length. \
+                          The table may have been modified between transaction creation and execution."
+                    .to_string(),
+            });
+        }
+    }
+
+    flags
+}
+
+/// Fetch the address list of a lookup table via `getAddressLookupTable`.
+/// Returns Ok(None) when the table does not exist on chain.
+async fn fetch_lookup_table_addresses(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    table_address: &str,
+) -> Result<Option<Vec<String>>> {
+    let request = GetAltRequest {
+        jsonrpc: "2.0".to_string(),
+        id: 1,
+        method: "getAddressLookupTable".to_string(),
+        params: (table_address.to_string(), GetAltConfig { encoding: "jsonParsed".to_string() }),
+    };
+
+    let response = client
+        .post(rpc_url)
+        .json(&request)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("Failed to send getAddressLookupTable RPC request")?;
+
+    let body: GetAltResponse = response.json().await.context("Failed to parse getAddressLookupTable RPC response")?;
+
+    if let Some(err) = body.error {
+        anyhow::bail!("RPC error: {}", err.message);
+    }
+
+    match body.result {
+        Some(result) => match result.value {
+            Some(value) => Ok(Some(value.data.addresses)),
+            None => Ok(None),
+        },
+        None => Ok(None),
+    }
 }
 
 // ── Dynamic Program Verification ─────────────────────────────────────────────

@@ -63,6 +63,8 @@ async fn test_simulate_program_error() {
     let error = result.error.expect("expected an error");
     assert!(error.contains("InstructionError"), "error should mention InstructionError, got: {}", error);
     assert_eq!(result.logs, vec!["Program log: fail"]);
+    assert_eq!(result.error_code.as_deref(), Some("Custom(42)"));
+    assert_eq!(result.error_instruction_index, Some(0));
 }
 
 /// Compute unit exhaustion: error mentions ProgramFailedToComplete, logs preserved.
@@ -102,6 +104,8 @@ async fn test_simulate_cu_exhaustion() {
         "CU exhaustion log line should be preserved, got: {:?}",
         result.logs
     );
+    assert_eq!(result.error_code.as_deref(), Some("ProgramFailedToComplete"));
+    assert_eq!(result.error_instruction_index, Some(0));
 }
 
 /// RPC-level error object: mapped to "RPC error: {message}".
@@ -140,6 +144,68 @@ async fn test_simulate_missing_result() {
     assert!(!result.success);
     let error = result.error.expect("expected an error");
     assert!(error.contains("No result returned"), "unexpected error: {}", error);
+}
+
+/// Insufficient funds: top-level error name, no instruction index.
+#[tokio::test]
+async fn test_simulate_insufficient_funds() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(POST).path("/").json_body_partial(json!({"method": "simulateTransaction"}).to_string());
+        then.status(200).json_body(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "value": {
+                    "err": {"InsufficientFundsForFee": {}},
+                    "logs": [],
+                    "unitsConsumed": 0,
+                    "returnData": null
+                }
+            }
+        }));
+    });
+
+    let result = simulator::simulate_transaction(&server.url(""), DUMMY_TX).await.expect("expected Ok");
+
+    assert!(!result.success);
+    assert_eq!(result.error_code.as_deref(), Some("InsufficientFundsForFee"));
+    assert_eq!(result.error_instruction_index, None);
+}
+
+/// The structured error parser handles all recognized RPC error shapes.
+#[test]
+fn test_parse_simulation_error_shapes() {
+    use rust_security_toolkit::simulator::parse_simulation_error;
+
+    // InstructionError with a string code
+    assert_eq!(
+        parse_simulation_error(&json!({"InstructionError": [2, "ProgramFailedToComplete"]})),
+        (Some("ProgramFailedToComplete".to_string()), Some(2))
+    );
+    // InstructionError with a custom numeric code
+    assert_eq!(
+        parse_simulation_error(&json!({"InstructionError": [0, {"Custom": 42}]})),
+        (Some("Custom(42)".to_string()), Some(0))
+    );
+    // Top-level error name
+    assert_eq!(
+        parse_simulation_error(&json!({"InsufficientFundsForFee": {}})),
+        (Some("InsufficientFundsForFee".to_string()), None)
+    );
+    assert_eq!(
+        parse_simulation_error(&json!({"BlockhashNotFound": {}})),
+        (Some("BlockhashNotFound".to_string()), None)
+    );
+    // InstructionError without an array payload
+    assert_eq!(
+        parse_simulation_error(&json!({"InstructionError": null})),
+        (Some("InstructionError".to_string()), None)
+    );
+    // Non-object values and unknown shapes
+    assert_eq!(parse_simulation_error(&serde_json::Value::Null), (None, None));
+    assert_eq!(parse_simulation_error(&json!("just a string")), (None, None));
+    assert_eq!(parse_simulation_error(&json!({"weird": 1})), (Some("weird".to_string()), None));
 }
 
 /// Non-JSON HTTP error body: the call surfaces as Err.

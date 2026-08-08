@@ -64,6 +64,10 @@ pub struct MappedAccount {
 pub struct AltResolution {
     pub table_address: String,
     pub resolved_accounts: Vec<ResolvedAccount>,
+    /// Whether the table was fetched on-chain (requires --rpc). When false,
+    /// `ResolvedAccount.pubkey` values are `<alt_index_N>` placeholders.
+    #[serde(default)]
+    pub resolved: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +75,9 @@ pub struct ResolvedAccount {
     pub index_in_tx: u8,
     pub pubkey: String,
     pub is_writable: bool,
+    /// Index of this account within its address lookup table.
+    #[serde(default)]
+    pub table_index: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +97,12 @@ pub struct SimulationResult {
     pub logs: Vec<String>,
     pub units_consumed: u64,
     pub return_data: Option<String>,
+    /// Structured error code, e.g. "Custom(42)" or "ProgramFailedToComplete".
+    #[serde(default)]
+    pub error_code: Option<String>,
+    /// Index of the instruction that failed, when the error is an InstructionError.
+    #[serde(default)]
+    pub error_instruction_index: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

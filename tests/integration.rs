@@ -87,6 +87,44 @@ fn test_validate_decoding_too_short() {
     assert!(result.is_err() || result.unwrap().len() > 0);
 }
 
+// ── Input Decoding Tests ────────────────────────────────────────────────────
+
+#[test]
+fn test_decode_input_bytes_text_and_raw() {
+    use rust_security_toolkit::encoding;
+
+    // Hex text
+    assert_eq!(encoding::decode_input_bytes(b"deadbeef").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+
+    // Base58 text with a trailing newline (trimmed before detection)
+    let base58 = "2xPFR3JFj5DMhYuT8pE4dKdC6eHkjKDS3sGmxG";
+    assert_eq!(
+        encoding::decode_input_bytes(format!("{}\n", base58).as_bytes()).unwrap(),
+        bs58::decode(base58).into_vec().unwrap()
+    );
+
+    // Invalid UTF-8 → raw bytes pass through untouched
+    let raw = vec![0x01u8, 0x02, 0xff, 0x80, 0x7f];
+    assert_eq!(encoding::decode_input_bytes(&raw).unwrap(), raw);
+
+    // Empty input stays empty
+    assert!(encoding::decode_input_bytes(b"").unwrap().is_empty());
+}
+
+/// The committed raw binary fixture decodes end-to-end through the CLI input path.
+#[test]
+fn test_decode_raw_binary_fixture() {
+    use rust_security_toolkit::encoding;
+
+    let bytes = std::fs::read("tests/fixtures/system_transfer.bin").expect("read bin fixture");
+    let decoded = encoding::decode_input_bytes(&bytes).expect("decode input bytes");
+    assert_eq!(decoded, bytes, "raw binary must pass through untouched");
+
+    let report = decoder::decode_raw_bytes(&decoded, None).expect("Decode raw binary fixture");
+    assert_eq!(report.instructions.len(), 1);
+    assert_eq!(report.instructions[0].instruction_name.as_deref(), Some("Transfer"));
+}
+
 // ── Validator Tests ──────────────────────────────────────────────────────────
 
 fn make_report() -> TransactionReport {
@@ -195,6 +233,7 @@ fn test_alt_empty_flag() {
     report.address_lookup_tables.push(AltResolution {
         table_address: "AddressLookupTab1e1111111111111111111111111".into(),
         resolved_accounts: vec![],
+        resolved: false,
     });
     validator::validate(&mut report, None);
     assert!(report.risk_flags.iter().any(|f| f.category == RiskCategory::AltIntegrity));
@@ -209,7 +248,9 @@ fn test_alt_with_accounts_not_flagged() {
             index_in_tx: 5,
             pubkey: "11111111111111111111111111111111".into(),
             is_writable: false,
+            table_index: None,
         }],
+        resolved: false,
     });
     validator::validate(&mut report, None);
     assert!(!report.risk_flags.iter().any(|f| f.category == RiskCategory::AltIntegrity));

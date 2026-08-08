@@ -158,4 +158,46 @@ mod cli_e2e_tests {
 
         assert!(!output.status.success());
     }
+
+    /// Decode raw binary transaction bytes via --file.
+    #[test]
+    fn test_cli_raw_binary_file() {
+        let output = rts_binary()
+            .arg("--json")
+            .arg("--file")
+            .arg("tests/fixtures/system_transfer.bin")
+            .output()
+            .expect("Failed to execute rts binary");
+
+        assert!(output.status.success(), "rts exited with: {:?}", output.status);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let report: serde_json::Value = serde_json::from_str(&stdout).expect("rts --json output is not valid JSON");
+        assert_eq!(report["status"], "DECODED SUCCESSFULLY");
+        assert_eq!(report["instructions"][0]["program_name"], "System Program");
+    }
+
+    /// Pipe raw binary transaction bytes via stdin.
+    #[test]
+    fn test_cli_raw_binary_stdin() {
+        let bytes = std::fs::read("tests/fixtures/system_transfer.bin").expect("read bin fixture");
+
+        let mut child = rts_binary()
+            .arg("--json")
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("Failed to spawn rts binary");
+
+        {
+            let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+            stdin.write_all(&bytes).expect("Failed to write to stdin");
+        }
+
+        let output = child.wait_with_output().expect("Failed to wait on rts");
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let report: serde_json::Value = serde_json::from_str(&stdout).expect("rts --json output is not valid JSON");
+        assert_eq!(report["status"], "DECODED SUCCESSFULLY");
+    }
 }

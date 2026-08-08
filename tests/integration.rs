@@ -705,6 +705,139 @@ fn create_account_instruction(from: &Pubkey, to: &Pubkey, lamports: u64, space: 
 
 /// Verify that high-CU instructions (CreateAccount, 15k CU) are flagged
 /// when they exceed the dynamic threshold.
+// ── IDL Account Count Consistency Tests ──────────────────────────────────────
+
+fn make_single_account_idl() -> IdlJson {
+    IdlJson {
+        version: "0.1.0".into(),
+        name: "test_program".into(),
+        instructions: vec![IdlInstruction {
+            name: "do_thing".into(),
+            accounts: vec![IdlAccountItem {
+                name: "authority".into(),
+                is_mut: false,
+                is_signer: true,
+                pda: None,
+                desc: None,
+            }],
+            args: vec![],
+        }],
+        accounts: vec![],
+        types: vec![],
+    }
+}
+
+fn mapped_account(pubkey: &str, is_signer: bool) -> MappedAccount {
+    MappedAccount { name: None, pubkey: pubkey.into(), account_index: 0, is_signer, is_writable: true }
+}
+
+/// A compiled account list longer than the IDL's declared accounts (beyond the
+/// appended program id) is flagged: positional mapping may be misaligned.
+#[test]
+fn test_idl_account_count_mismatch_flag() {
+    let idl = make_single_account_idl();
+    let mut report = make_report();
+    report.instructions.push(DecodedInstruction {
+        index: 0,
+        program_id: "11111111111111111111111111111111".into(),
+        program_name: "System Program".into(),
+        instruction_name: Some("do_thing".into()),
+        accounts: vec![
+            mapped_account("11111111111111111111111111111111", true),
+            mapped_account("22222222222222222222222222222222222222222222", false),
+            mapped_account("33333333333333333333333333333333333333333333", false),
+        ],
+        data: serde_json::Value::Null,
+        raw_data_hex: String::new(),
+    });
+
+    validator::validate(&mut report, Some(&idl));
+    assert!(report.risk_flags.iter().any(|f| f.category == RiskCategory::IdlAccountMismatch));
+}
+
+/// IDL-matched instructions with the expected count (with or without the
+/// appended program id) are not flagged.
+#[test]
+fn test_idl_account_count_ok() {
+    let idl = make_single_account_idl();
+    let mut report = make_report();
+    // IDL declares 1 account; compiled lists 2 with the program id appended.
+    report.instructions.push(DecodedInstruction {
+        index: 0,
+        program_id: "11111111111111111111111111111111".into(),
+        program_name: "System Program".into(),
+        instruction_name: Some("do_thing".into()),
+        accounts: vec![
+            mapped_account("11111111111111111111111111111111", true),
+            mapped_account("11111111111111111111111111111111", false),
+        ],
+        data: serde_json::Value::Null,
+        raw_data_hex: String::new(),
+    });
+
+    validator::validate(&mut report, Some(&idl));
+    assert!(!report.risk_flags.iter().any(|f| f.category == RiskCategory::IdlAccountMismatch));
+}
+
+// ── Token-2022 Instruction Coverage Tests ────────────────────────────────────
+
+#[test]
+fn test_token_2022_instruction_names() {
+    use rust_security_toolkit::instruction_decoder::decode_instruction_data;
+    let t22 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        (vec![21, 1, 0, 0, 0, 0, 0], "GetAccountDataSize"),
+        (vec![22], "InitializeImmutableOwner"),
+        (vec![23, 0x40, 0x42, 0x0f, 0, 0, 0, 0, 0], "AmountToUiAmount"),
+        (vec![24, b'h', b'i'], "UiAmountToAmount"),
+        (vec![28, 1, 0, 0, 0, 1, 0], "DefaultAccountStateExtension"),
+        (vec![29, 1, 0, 0, 0, 1, 0], "Reallocate"),
+        (vec![30], "MemoTransferExtension"),
+        (vec![31], "CreateNativeMint"),
+        (vec![32], "InitializeNonTransferableMint"),
+        (vec![33, 0, 0x40, 0x42], "InitializeInterestBearingMint"),
+        (vec![33, 1, 0x40, 0x42], "UpdateInterestBearingMintRate"),
+        (vec![34, 0], "EnableCpiGuard"),
+        (vec![34, 1], "DisableCpiGuard"),
+        (vec![38], "WithdrawExcessLamports"),
+        (vec![44, 0], "Pause"),
+        (vec![44, 1], "Resume"),
+    ];
+    for (data, expected) in cases {
+        let (name, _) = decode_instruction_data(t22, &data, None);
+        assert_eq!(name.as_deref(), Some(expected), "data {:02x?}", data);
+    }
+
+    // 35 is InitializePermanentDelegate in the pinned spl-token-2022 numbering
+    // (31 is CreateNativeMint).
+    let mut data = vec![35u8];
+    data.extend_from_slice(&[7u8; 32]);
+    let (name, decoded) = decode_instruction_data(t22, &data, None);
+    assert_eq!(name.as_deref(), Some("InitializePermanentDelegate"));
+    let expected_pk = Pubkey::new_from_array([7u8; 32]).to_string();
+    assert!(decoded.to_string().contains(&expected_pk), "unexpected data: {}", decoded);
+
+    // TransferHookExtension requires the full pubkey payloads.
+    let mut data = vec![36u8, 0];
+    data.extend_from_slice(&[7u8; 64]);
+    let (name, _) = decode_instruction_data(t22, &data, None);
+    assert_eq!(name.as_deref(), Some("InitializeTransferHook"));
+    let mut data = vec![36u8, 1];
+    data.extend_from_slice(&[7u8; 32]);
+    let (name, _) = decode_instruction_data(t22, &data, None);
+    assert_eq!(name.as_deref(), Some("UpdateTransferHook"));
+
+    // Extension-type payloads decode as u16 lists.
+    let (name, decoded) = decode_instruction_data(t22, &vec![28, 1, 0, 0, 0, 1, 0], None);
+    assert_eq!(name.as_deref(), Some("DefaultAccountStateExtension"));
+    assert_eq!(decoded, serde_json::json!({"extension_types": [1]}));
+
+    // Token-2022 discriminators must not leak into the legacy token decoder.
+    let (name, _) = decode_instruction_data("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", &[31], None);
+    assert_eq!(name, None);
+}
+
 #[test]
 fn test_high_cu_instruction_detection() {
     let from = Keypair::new();

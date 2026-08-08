@@ -240,7 +240,17 @@ fn decode_token_instruction(data: &[u8], program_id: &str) -> (Option<String>, s
             (Some("InitializeMultisig2".into()), serde_json::json!({ "m": m }))
         }
         20 if is_token22 => (Some("InitializeMint2".into()), serde_json::Value::Null),
+        21 if is_token22 => (Some("GetAccountDataSize".into()), decode_extension_types(payload)),
         22 if is_token22 => (Some("InitializeImmutableOwner".into()), serde_json::Value::Null),
+        23 if is_token22 && payload.len() >= 8 => (
+            Some("AmountToUiAmount".into()),
+            serde_json::json!({"amount": u64::from_le_bytes(payload[0..8].try_into().unwrap())}),
+        ),
+        24 if is_token22 => {
+            let ui_amount =
+                std::str::from_utf8(payload).map(|s| s.to_string()).unwrap_or_else(|_| hex::encode(payload));
+            (Some("UiAmountToAmount".into()), serde_json::json!({"ui_amount": ui_amount}))
+        }
         25 if is_token22 => {
             let mut map = serde_json::Map::new();
             if payload.len() >= 33 {
@@ -257,16 +267,49 @@ fn decode_token_instruction(data: &[u8], program_id: &str) -> (Option<String>, s
         }
         26 if is_token22 => decode_transfer_fee_extension(payload),
         27 if is_token22 => decode_confidential_transfer_extension(payload),
-        31 if is_token22 => {
+        28 if is_token22 => (Some("DefaultAccountStateExtension".into()), decode_extension_types(payload)),
+        29 if is_token22 => (Some("Reallocate".into()), decode_extension_types(payload)),
+        30 if is_token22 => (Some("MemoTransferExtension".into()), serde_json::Value::Null),
+        31 if is_token22 => (Some("CreateNativeMint".into()), serde_json::Value::Null),
+        32 if is_token22 => (Some("InitializeNonTransferableMint".into()), serde_json::Value::Null),
+        33 if is_token22 => decode_interest_bearing_mint_extension(payload),
+        34 if is_token22 => decode_cpi_guard_extension(payload),
+        35 if is_token22 => {
             let mut map = serde_json::Map::new();
-            if payload.len() >= 33
+            if payload.len() >= 32
                 && let Ok(delegate) = Pubkey::try_from(&payload[0..32])
             {
                 map.insert("delegate".into(), serde_json::Value::String(delegate.to_string()));
             }
             (Some("InitializePermanentDelegate".into()), serde_json::Value::Object(map))
         }
+        36 if is_token22 => decode_transfer_hook_extension(payload),
         37 if is_token22 => (Some("ConfidentialTransferFeeExtension".into()), serde_json::Value::Null),
+        38 if is_token22 => (Some("WithdrawExcessLamports".into()), serde_json::Value::Null),
+        39 if is_token22 => decode_pointer_extension(
+            payload,
+            "InitializeMetadataPointer",
+            "UpdateMetadataPointer",
+            "MetadataPointerExtension",
+            "metadata_address",
+        ),
+        40 if is_token22 => decode_pointer_extension(
+            payload,
+            "InitializeGroupPointer",
+            "UpdateGroupPointer",
+            "GroupPointerExtension",
+            "group_address",
+        ),
+        41 if is_token22 => decode_pointer_extension(
+            payload,
+            "InitializeGroupMemberPointer",
+            "UpdateGroupMemberPointer",
+            "GroupMemberPointerExtension",
+            "group_member_address",
+        ),
+        42 if is_token22 => (Some("ConfidentialMintBurnExtension".into()), serde_json::Value::Null),
+        43 if is_token22 => (Some("ScaledUiAmountExtension".into()), serde_json::Value::Null),
+        44 if is_token22 => decode_pausable_extension(payload),
         _ => (None, serde_json::Value::String(hex::encode(data))),
     }
 }
@@ -316,6 +359,119 @@ fn decode_transfer_fee_extension(payload: &[u8]) -> (Option<String>, serde_json:
         }
         _ => (Some("TransferFeeExtension".into()), serde_json::Value::Null),
     }
+}
+
+fn decode_pointer_extension(
+    payload: &[u8],
+    init_name: &str,
+    update_name: &str,
+    fallback: &str,
+    field: &str,
+) -> (Option<String>, serde_json::Value) {
+    // Option<Pubkey> values: 1-byte tag + 32-byte pubkey when present.
+    let read_option_pubkey = |offset: usize| -> (Option<String>, usize) {
+        if payload.len() <= offset {
+            return (None, 1);
+        }
+        if payload[offset] == 1 && payload.len() >= offset + 33 {
+            (Pubkey::try_from(&payload[offset + 1..offset + 33]).ok().map(|p| p.to_string()), 33)
+        } else {
+            (None, 1)
+        }
+    };
+
+    match payload.first() {
+        Some(0) => {
+            let mut map = serde_json::Map::new();
+            let (authority, consumed) = read_option_pubkey(1);
+            if let Some(a) = authority {
+                map.insert("authority".into(), serde_json::Value::String(a));
+            }
+            let (address, _) = read_option_pubkey(1 + consumed);
+            if let Some(a) = address {
+                map.insert(field.into(), serde_json::Value::String(a));
+            }
+            (Some(init_name.into()), serde_json::Value::Object(map))
+        }
+        Some(1) => {
+            let mut map = serde_json::Map::new();
+            let (address, _) = read_option_pubkey(1);
+            if let Some(a) = address {
+                map.insert(field.into(), serde_json::Value::String(a));
+            }
+            (Some(update_name.into()), serde_json::Value::Object(map))
+        }
+        _ => (Some(fallback.into()), serde_json::Value::Null),
+    }
+}
+
+fn decode_interest_bearing_mint_extension(payload: &[u8]) -> (Option<String>, serde_json::Value) {
+    match payload.first() {
+        Some(0) if payload.len() >= 3 => {
+            let rate_bps = i16::from_le_bytes([payload[1], payload[2]]);
+            (Some("InitializeInterestBearingMint".into()), serde_json::json!({"rate_bps": rate_bps}))
+        }
+        Some(1) if payload.len() >= 3 => {
+            let rate_bps = i16::from_le_bytes([payload[1], payload[2]]);
+            (Some("UpdateInterestBearingMintRate".into()), serde_json::json!({"rate_bps": rate_bps}))
+        }
+        _ => (Some("InterestBearingMintExtension".into()), serde_json::Value::Null),
+    }
+}
+
+fn decode_cpi_guard_extension(payload: &[u8]) -> (Option<String>, serde_json::Value) {
+    match payload.first() {
+        Some(0) => (Some("EnableCpiGuard".into()), serde_json::Value::Null),
+        Some(1) => (Some("DisableCpiGuard".into()), serde_json::Value::Null),
+        _ => (Some("CpiGuardExtension".into()), serde_json::Value::Null),
+    }
+}
+
+fn decode_transfer_hook_extension(payload: &[u8]) -> (Option<String>, serde_json::Value) {
+    match payload.first() {
+        Some(0) if payload.len() >= 65 => {
+            let mut map = serde_json::Map::new();
+            if let Ok(a) = Pubkey::try_from(&payload[1..33]) {
+                map.insert("authority".into(), serde_json::Value::String(a.to_string()));
+            }
+            if let Ok(p) = Pubkey::try_from(&payload[33..65]) {
+                map.insert("program_id".into(), serde_json::Value::String(p.to_string()));
+            }
+            (Some("InitializeTransferHook".into()), serde_json::Value::Object(map))
+        }
+        Some(1) if payload.len() >= 33 => {
+            let mut map = serde_json::Map::new();
+            if let Ok(p) = Pubkey::try_from(&payload[1..33]) {
+                map.insert("program_id".into(), serde_json::Value::String(p.to_string()));
+            }
+            (Some("UpdateTransferHook".into()), serde_json::Value::Object(map))
+        }
+        _ => (Some("TransferHookExtension".into()), serde_json::Value::Null),
+    }
+}
+
+fn decode_pausable_extension(payload: &[u8]) -> (Option<String>, serde_json::Value) {
+    match payload.first() {
+        Some(0) => (Some("Pause".into()), serde_json::Value::Null),
+        Some(1) => (Some("Resume".into()), serde_json::Value::Null),
+        _ => (Some("PausableExtension".into()), serde_json::Value::Null),
+    }
+}
+
+/// Decode a `Vec<ExtensionType>` (u32 LE count + u16 items) from instruction data.
+fn decode_extension_types(payload: &[u8]) -> serde_json::Value {
+    if payload.len() < 4 {
+        return serde_json::Value::Null;
+    }
+    let count = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+    let count = count.min(payload.len().saturating_sub(4) / 2);
+    let items: Vec<serde_json::Value> = (0..count)
+        .map(|i| {
+            let off = 4 + i * 2;
+            serde_json::json!(u16::from_le_bytes([payload[off], payload[off + 1]]))
+        })
+        .collect();
+    serde_json::json!({"extension_types": items})
 }
 
 fn decode_confidential_transfer_extension(payload: &[u8]) -> (Option<String>, serde_json::Value) {

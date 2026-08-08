@@ -21,7 +21,7 @@
 
 ### Prerequisites
 
-- Rust 1.80+ (edition 2024)
+- Rust 1.89+ (edition 2024; the pinned solana dependency tree requires 1.89)
 - Solana CLI (optional, for RPC simulation features)
 
 ### From source
@@ -178,7 +178,7 @@ cargo +nightly fuzz run decode
 ```
 
 Test coverage:
-- **86 tests** (unit, integration, CLI e2e, mocked program verification + simulation + ALT resolution, mainnet round-trip, property tests)
+- **92 tests** (unit, integration, CLI e2e, mocked program verification + simulation + ALT resolution, mainnet round-trip, property tests)
 - Encoding detection for all four formats (Base58, Base64, Hex, Raw)
 - Transaction round-trip: legacy, v0, and compute budget fixtures
 - Mainnet round-trip: 30 committed mainnet transactions decoded across all four encodings with byte-identical reports

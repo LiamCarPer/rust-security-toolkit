@@ -355,6 +355,8 @@ struct AccountInfoResult {
 struct AccountData {
     owner: String,
     executable: bool,
+    #[serde(default)]
+    data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -444,6 +446,31 @@ async fn verify_programs_inner(rpc_url: &str, registry_url: &str, report: &Trans
                         });
                     }
                 }
+
+                // Report who can upgrade the program (best-effort).
+                if let Some(authority) = check_upgrade_authority(rpc_url, program_id).await {
+                    let (message, details) = match authority {
+                        Some(auth) => (
+                            format!("Program '{}' is upgradeable; upgrade authority: '{}'", program_id, auth),
+                            "The program can be upgraded at any time by this authority. Verify the \
+                             authority is a trusted entity (e.g. a DAO, multisig, or timelock)."
+                                .to_string(),
+                        ),
+                        None => (
+                            format!("Program '{}' is upgradeable with no upgrade authority (immutable)", program_id),
+                            "The program data account declares no upgrade authority, so the deployed \
+                             bytecode can never be upgraded."
+                                .to_string(),
+                        ),
+                    };
+                    flags.push(RiskFlag {
+                        severity: RiskSeverity::Info,
+                        category: RiskCategory::ProgramOwnership,
+                        instruction_index: Some(ix.index),
+                        message,
+                        details,
+                    });
+                }
             }
             ProgramOwner::Frozen => {
                 // Frozen (immutable) programs are lower risk
@@ -473,6 +500,85 @@ enum ProgramOwner {
     Upgradeable,
     Frozen,
     Unknown(String),
+}
+
+/// Fetch the upgrade authority of an upgradeable program (best-effort).
+///
+/// Returns `Some(Some(auth))` when the program data account declares an
+/// authority, `Some(None)` when it is immutable (no authority), and `None`
+/// when the layout is not a standard upgradeable program or the fetch fails.
+/// Failures are silent: the ownership check already succeeded, and this is
+/// enrichment information.
+async fn check_upgrade_authority(rpc_url: &str, program_id: &str) -> Option<Option<String>> {
+    use solana_loader_v3_interface::state::UpgradeableLoaderState;
+
+    let client = reqwest::Client::new();
+
+    // The program account's data points at the program data account.
+    let program_data_address = match fetch_account_data(&client, rpc_url, program_id).await {
+        Ok(Some(data)) => match bincode::deserialize::<UpgradeableLoaderState>(&data) {
+            Ok(UpgradeableLoaderState::Program { programdata_address }) => programdata_address,
+            Ok(UpgradeableLoaderState::ProgramData { upgrade_authority_address, .. }) => {
+                // Unusual: the queried account is itself a program data account.
+                return Some(upgrade_authority_address.map(|p| p.to_string()));
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+
+    match fetch_account_data(&client, rpc_url, &program_data_address.to_string()).await {
+        Ok(Some(data)) => match bincode::deserialize::<UpgradeableLoaderState>(&data) {
+            Ok(UpgradeableLoaderState::ProgramData { upgrade_authority_address, .. }) => {
+                Some(upgrade_authority_address.map(|p| p.to_string()))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Fetch an account's raw data (base64) via getAccountInfo.
+async fn fetch_account_data(client: &reqwest::Client, rpc_url: &str, address: &str) -> Result<Option<Vec<u8>>> {
+    let request = GetAccountInfoRequest {
+        jsonrpc: "2.0".to_string(),
+        id: 1,
+        method: "getAccountInfo".to_string(),
+        params: (
+            address.to_string(),
+            GetAccountInfoConfig { encoding: "base64".to_string(), commitment: "confirmed".to_string() },
+        ),
+    };
+
+    let response = client
+        .post(rpc_url)
+        .json(&request)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("Failed to send getAccountInfo RPC request")?;
+
+    let body: GetAccountInfoResponse = response.json().await.context("Failed to parse getAccountInfo RPC response")?;
+
+    if let Some(err) = body.error {
+        anyhow::bail!("RPC error: {}", err.message);
+    }
+
+    match body.result.and_then(|r| r.value) {
+        Some(account) => match account.data {
+            Some(serde_json::Value::Array(items)) => items
+                .first()
+                .and_then(|d| d.as_str())
+                .and_then(|b64| {
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.decode(b64).ok()
+                })
+                .map(Some)
+                .ok_or_else(|| anyhow::anyhow!("account data is not base64-encoded")),
+            _ => Ok(None),
+        },
+        None => Ok(None),
+    }
 }
 
 /// Check the on-chain owner of a program account via RPC getAccountInfo.

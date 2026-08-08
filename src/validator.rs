@@ -10,6 +10,7 @@ pub fn validate(report: &mut TransactionReport, idl: Option<&IdlJson>) {
         validate_pda_seeds_tier1(idl, &mut flags);
         validate_pda_seeds_tier2(report, idl, &mut flags);
         validate_missing_signers(report, idl, &mut flags);
+        validate_idl_account_counts(report, idl, &mut flags);
     }
 
     validate_writable_entities(report, &mut flags);
@@ -267,6 +268,49 @@ fn describe_seeds_vec(pda: &IdlPda) -> Vec<String> {
             other => format!("{}(?)", other),
         })
         .collect()
+}
+
+// ── IDL Account Count Consistency ────────────────────────────────────────────
+
+/// Flag instructions whose compiled account list is longer than the IDL's
+/// declared account list (accounting for the program id that Anchor appends as
+/// the final account meta). Positional IDL-to-transaction account mapping is
+/// unreliable in this case, so signer/PDA checks may point at the wrong
+/// accounts. Shorter compiled lists are legitimate (duplicate-key dedup).
+fn validate_idl_account_counts(report: &TransactionReport, idl: &IdlJson, flags: &mut Vec<RiskFlag>) {
+    for decoded_ix in &report.instructions {
+        let ix_name = match &decoded_ix.instruction_name {
+            Some(name) => name,
+            None => continue,
+        };
+        let idl_ix = match idl.find_instruction(ix_name) {
+            Some(ix) => ix,
+            None => continue,
+        };
+
+        let idl_count = idl_ix.accounts.len();
+        let compiled_count = decoded_ix.accounts.len();
+        let has_appended_program_id =
+            decoded_ix.accounts.last().map(|a| a.pubkey == decoded_ix.program_id).unwrap_or(false);
+        let expected = idl_count + usize::from(has_appended_program_id);
+
+        if compiled_count > expected {
+            flags.push(RiskFlag {
+                severity: RiskSeverity::Warning,
+                category: RiskCategory::IdlAccountMismatch,
+                instruction_index: Some(decoded_ix.index),
+                message: format!(
+                    "Instruction '{}': transaction lists {} accounts but the IDL declares {} — \
+                     positional account mapping may be misaligned",
+                    ix_name, compiled_count, idl_count
+                ),
+                details: "The compiled instruction account list is longer than the IDL's declared \
+                          accounts (accounting for the appended program id). Account-role and PDA \
+                          checks for this instruction may map to the wrong accounts."
+                    .to_string(),
+            });
+        }
+    }
 }
 
 // ── Missing Signer Check ─────────────────────────────────────────────────────

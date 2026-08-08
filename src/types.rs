@@ -135,6 +135,7 @@ pub enum RiskCategory {
     VerifiedBuild,
     InternalDecodeMismatch,
     PdaWellFormedness,
+    IdlAccountMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

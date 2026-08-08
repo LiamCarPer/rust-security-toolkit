@@ -247,6 +247,7 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
     }
 
     if let Some(idl) = idl {
+        annotate_instruction_account_names(&mut instructions, idl);
         annotate_pda_accounts(&mut accounts, &instructions, idl);
     }
 
@@ -264,6 +265,30 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
         simulation: None,
         warnings: Vec::new(),
     })
+}
+
+/// Annotate instruction account metas with their IDL-declared names
+/// (positionally — the same assumption the `IdlAccountMismatch` validator flag
+/// guards). These names drive the `sat` tx-report correlation.
+fn annotate_instruction_account_names(instructions: &mut [DecodedInstruction], idl: &IdlJson) {
+    for decoded_ix in instructions {
+        let ix_name = match &decoded_ix.instruction_name {
+            Some(name) => name,
+            None => continue,
+        };
+        let idl_ix = match idl.find_instruction(ix_name) {
+            Some(ix) => ix,
+            None => continue,
+        };
+
+        for (acc_idx, idl_account) in idl_ix.accounts.iter().enumerate() {
+            if let Some(mapped) = decoded_ix.accounts.get_mut(acc_idx)
+                && mapped.name.is_none()
+            {
+                mapped.name = Some(idl_account.name.clone());
+            }
+        }
+    }
 }
 
 fn annotate_pda_accounts(accounts: &mut [AccountInfo], instructions: &[DecodedInstruction], idl: &IdlJson) {

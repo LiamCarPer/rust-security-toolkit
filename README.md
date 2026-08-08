@@ -146,6 +146,14 @@ The toolkit's primary downstream consumer is the **Solana Audit Toolkit (`sat`)*
 2. `rts --output-tx-report report.json <tx_bytes>` produces a structured report containing mapped account keys, parsed instruction names, decoded arguments, and PDA seed declarations
 3. `sat analyze src --tx-report report.json` ingests the report and cross-references runtime account configuration against AST-parsed `#[derive(Accounts)]` structures
 
+The report contract (`name` per instruction, `pda_info` per account with `bump`,
+top-level `program_name`) is locked by the `test_tx_report_sat_contract` test
+and verified end-to-end by the ignored `e2e_sat` test:
+
+```bash
+SAT_BIN=/path/to/sat cargo test --test e2e_sat -- --ignored
+```
+
 ## Testing
 
 ```bash
@@ -178,7 +186,7 @@ cargo +nightly fuzz run decode
 ```
 
 Test coverage:
-- **92 tests** (unit, integration, CLI e2e, mocked program verification + simulation + ALT resolution, mainnet round-trip, property tests)
+- **93 tests** (unit, integration, CLI e2e, mocked program verification + simulation + ALT resolution, mainnet round-trip, property tests)
 - Encoding detection for all four formats (Base58, Base64, Hex, Raw)
 - Transaction round-trip: legacy, v0, and compute budget fixtures
 - Mainnet round-trip: 30 committed mainnet transactions decoded across all four encodings with byte-identical reports

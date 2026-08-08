@@ -187,9 +187,14 @@ pub fn render_json(report: &TransactionReport) -> String {
 }
 
 /// Export the transaction report for `sat` consumption.
-pub fn render_tx_report(report: &TransactionReport) -> String {
+///
+/// The shape follows the contract in sat's `tx_report.rs` (`name` per
+/// instruction, `pda_info` per account, top-level `program_name`); extra keys
+/// are ignored by sat's serde deserialization.
+pub fn render_tx_report(report: &TransactionReport, program_name: &str) -> String {
     let sat_report = serde_json::json!({
         "schema_version": "1.0",
+        "program_name": program_name,
         "transaction": {
             "signatures": report.signatures,
             "fee_payer": report.fee_payer,
@@ -215,14 +220,23 @@ pub fn render_tx_report(report: &TransactionReport) -> String {
             serde_json::json!({
                 "index": ix.index,
                 "program_id": ix.program_id,
+                "name": ix.instruction_name,
                 "instruction_name": ix.instruction_name,
                 "accounts": ix.accounts.iter().map(|a| {
+                    let pda = report.accounts.get(a.account_index as usize).and_then(|acc| acc.pda_info.as_ref());
                     serde_json::json!({
                         "name": a.name,
                         "pubkey": a.pubkey,
                         "account_index": a.account_index,
                         "is_signer": a.is_signer,
                         "is_writable": a.is_writable,
+                        "pda_info": pda.map(|p| {
+                            serde_json::json!({
+                                "seeds_declared": p.seeds_declared,
+                                "bump": p.bump,
+                                "expected_address": p.expected_address,
+                            })
+                        }),
                     })
                 }).collect::<Vec<_>>(),
                 "data": ix.data,

@@ -407,12 +407,143 @@ fn test_render_json_serializes() {
 #[test]
 fn test_render_tx_report_has_required_fields() {
     let report = make_report_with_data();
-    let json_str = ui::render_tx_report(&report);
+    let json_str = ui::render_tx_report(&report, "test_program");
     let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     assert!(parsed["schema_version"].is_string());
+    assert_eq!(parsed["program_name"], "test_program");
     assert!(parsed["transaction"]["signatures"].is_array());
     assert!(parsed["accounts"].is_array());
     assert!(parsed["instructions"].is_array());
+    assert!(parsed["instructions"][0]["name"].is_string());
+}
+
+// ── sat tx-report contract tests ────────────────────────────────────────────
+// The structs below mirror `solana-audit-toolkit/crates/sat/src/tx_report.rs`
+// exactly (field names + serde defaults); if either side drifts, this test
+// fails and the integration contract is broken.
+
+#[derive(Debug, serde::Deserialize)]
+struct SatTxReport {
+    #[serde(default)]
+    schema_version: String,
+    #[serde(default)]
+    program_name: String,
+    #[serde(default)]
+    instructions: Vec<SatInstruction>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SatInstruction {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    accounts: Vec<SatAccount>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SatAccount {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    is_signer: bool,
+    #[serde(default)]
+    is_writable: bool,
+    #[serde(default)]
+    pda_info: Option<SatPda>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SatPda {
+    #[serde(default)]
+    seeds_declared: Vec<String>,
+    #[serde(default)]
+    bump: Option<u8>,
+}
+
+/// The tx-report emitted by `render_tx_report` must deserialize into sat's
+/// expected shape with names and PDA info intact — i.e. sat's correlation can
+/// actually match instructions and accounts.
+#[test]
+fn test_tx_report_sat_contract() {
+    let program_id = Pubkey::new_from_array([1u8; 32]);
+    let payer = Keypair::new();
+    let from = Pubkey::new_unique();
+    let authority = Pubkey::new_unique();
+    let (vault, bump) = Pubkey::find_program_address(&[b"vault"], &program_id);
+    let recent_blockhash = Hash::new_from_array([7u8; 32]);
+
+    let discriminator = decoder::compute_anchor_discriminator("transfer_tokens");
+    let ix = Instruction {
+        program_id,
+        accounts: vec![
+            solana_sdk::instruction::AccountMeta::new(from, false),
+            solana_sdk::instruction::AccountMeta::new_readonly(authority, false),
+            solana_sdk::instruction::AccountMeta::new_readonly(vault, false),
+        ],
+        data: discriminator.to_vec(),
+    };
+    let message = VersionedMessage::Legacy(solana_sdk::message::legacy::Message::new_with_blockhash(
+        &[ix],
+        Some(&payer.pubkey()),
+        &recent_blockhash,
+    ));
+    let tx = VersionedTransaction { signatures: vec![payer.sign_message(&message.serialize()).into()], message };
+    let serialized = bincode::serialize(&tx).unwrap();
+
+    let idl = IdlJson {
+        version: "0.1.0".into(),
+        name: "test_program".into(),
+        instructions: vec![IdlInstruction {
+            name: "transfer_tokens".into(),
+            accounts: vec![
+                IdlAccountItem { name: "from".into(), is_mut: true, is_signer: false, pda: None, desc: None },
+                IdlAccountItem { name: "authority".into(), is_mut: false, is_signer: true, pda: None, desc: None },
+                IdlAccountItem {
+                    name: "vault".into(),
+                    is_mut: false,
+                    is_signer: false,
+                    pda: Some(IdlPda {
+                        seeds: vec![IdlSeed {
+                            kind: "const".into(),
+                            value: Some(b"vault".to_vec()),
+                            path: None,
+                            account: None,
+                        }],
+                    }),
+                    desc: None,
+                },
+            ],
+            args: vec![],
+        }],
+        accounts: vec![],
+        types: vec![],
+    };
+
+    let mut report = decoder::decode_raw_bytes(&serialized, Some(&idl)).expect("Decode with IDL");
+    validator::validate(&mut report, Some(&idl));
+
+    // Decoder populated IDL names on the mapped accounts.
+    assert_eq!(report.instructions[0].accounts[0].name.as_deref(), Some("from"));
+    assert_eq!(report.instructions[0].accounts[1].name.as_deref(), Some("authority"));
+    assert_eq!(report.instructions[0].accounts[2].name.as_deref(), Some("vault"));
+
+    let json_str = ui::render_tx_report(&report, &idl.name);
+    let sat: SatTxReport = serde_json::from_str(&json_str).expect("report must parse into sat's contract");
+
+    assert_eq!(sat.schema_version, "1.0");
+    assert_eq!(sat.program_name, "test_program");
+    assert_eq!(sat.instructions.len(), 1);
+    assert_eq!(sat.instructions[0].name, "transfer_tokens");
+    assert_eq!(sat.instructions[0].accounts.len(), 3);
+    assert_eq!(sat.instructions[0].accounts[0].name, "from");
+    assert_eq!(sat.instructions[0].accounts[0].is_writable, true);
+    assert_eq!(sat.instructions[0].accounts[1].name, "authority");
+    // Authority is a non-signer in the tx while the IDL declares isSigner=true:
+    // sat's correlation must be able to see this mismatch.
+    assert_eq!(sat.instructions[0].accounts[1].is_signer, false);
+    let pda = sat.instructions[0].accounts[2].pda_info.as_ref().expect("vault pda_info");
+    assert!(pda.seeds_declared.iter().any(|s| s.contains("vault")));
+    assert_eq!(pda.bump, Some(bump));
 }
 
 #[test]

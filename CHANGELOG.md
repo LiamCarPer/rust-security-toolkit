@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- `--output-tx-report` now emits the sat contract keys (`name` per instruction,
+  `pda_info` per account with `bump`, top-level `program_name`) and populates
+  IDL-declared account names, making the cross-tool correlation actually work
+  (verified end-to-end against sat).
+
 ## [v0.1.0] - 2026-08-08
 
 Initial release: Solana transaction forensics and IDL-aligned validation CLI for auditors.

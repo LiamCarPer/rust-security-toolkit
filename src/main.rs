@@ -120,7 +120,7 @@ async fn main() -> Result<()> {
     }
 
     if let Some(ref output_path) = cli.output_tx_report {
-        let report_json = ui::render_tx_report(&report);
+        let report_json = ui::render_tx_report(&report, idl.as_ref().map(|i| i.name.as_str()).unwrap_or(""));
         std::fs::write(output_path, report_json).context("Failed to write tx-report output")?;
     }
 

@@ -3,7 +3,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 use rust_security_toolkit::types::IdlJson;
-use rust_security_toolkit::{decoder, encoding, simulator, ui, validator};
+use rust_security_toolkit::{decoder, simulator, ui, validator};
 
 #[derive(Parser)]
 #[command(
@@ -69,11 +69,6 @@ async fn main() -> Result<()> {
         }
     };
 
-    let raw_bytes_decoded = encoding::decode_input_bytes(&input_bytes)?;
-    if raw_bytes_decoded.is_empty() {
-        anyhow::bail!("Transaction input is empty");
-    }
-
     let idl: Option<IdlJson> = match &cli.idl {
         Some(path) => {
             let contents = std::fs::read_to_string(path).context("Failed to read IDL file")?;
@@ -82,7 +77,7 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    let mut report = decoder::decode_raw_bytes(&raw_bytes_decoded, idl.as_ref())?;
+    let (raw_bytes_decoded, mut report) = decoder::decode_input(&input_bytes, idl.as_ref())?;
     validator::validate(&mut report, idl.as_ref());
 
     if cli.validate_decoding {

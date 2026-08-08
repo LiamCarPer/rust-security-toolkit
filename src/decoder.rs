@@ -3,8 +3,8 @@ use solana_sdk::{message::VersionedMessage, transaction::VersionedTransaction};
 
 use crate::types::{
     ADDRESS_LOOKUP_TABLE_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, AccountInfo, AltResolution,
-    COMPUTE_BUDGET_PROGRAM_ID, ComputeBudgetInfo, DecodedInstruction, IdlJson, MappedAccount, PdaInfo, ResolvedAccount,
-    SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, TransactionReport,
+    COMPUTE_BUDGET_PROGRAM_ID, ComputeBudgetInfo, DecodedInstruction, Encoding, IdlJson, MappedAccount, PdaInfo,
+    ResolvedAccount, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, TransactionReport,
 };
 
 use crate::{anchor_decoder, encoding, instruction_decoder, internal_parser};
@@ -22,11 +22,48 @@ pub fn decode_raw_bytes(raw_bytes: &[u8], idl: Option<&IdlJson>) -> Result<Trans
     decode_versioned_tx(tx, idl)
 }
 
+/// Decode a transaction from raw input bytes (text in Base58/Base64/Hex, or raw
+/// binary) and return the decoded bytes alongside the report.
+///
+/// All-hex even-length text is ambiguous: it is detected as Hex, but could be a
+/// Base58 or padding-less Base64 encoding. When the Hex interpretation fails to
+/// deserialize, the alternatives are retried before the primary error is
+/// returned.
+pub fn decode_input(input: &[u8], idl: Option<&IdlJson>) -> Result<(Vec<u8>, TransactionReport)> {
+    let bytes = encoding::decode_input_bytes(input)?;
+    if bytes.is_empty() {
+        anyhow::bail!("Transaction input is empty");
+    }
+
+    match decode_raw_bytes(&bytes, idl) {
+        Ok(report) => Ok((bytes, report)),
+        Err(primary_err) => {
+            if let Ok(text) = std::str::from_utf8(input) {
+                let trimmed = text.trim();
+                if is_ambiguous_hex_text(trimmed) {
+                    for candidate in [Encoding::Base58, Encoding::Base64] {
+                        if let Ok(alt_bytes) = encoding::decode_from_encoding(trimmed, candidate)
+                            && let Ok(report) = decode_raw_bytes(&alt_bytes, idl)
+                        {
+                            return Ok((alt_bytes, report));
+                        }
+                    }
+                }
+            }
+            Err(primary_err)
+        }
+    }
+}
+
+/// True for all-hex even-length text — the case where Hex, Base58, and
+/// padding-less Base64 interpretations all exist.
+fn is_ambiguous_hex_text(trimmed: &str) -> bool {
+    !trimmed.is_empty() && trimmed.len().is_multiple_of(2) && trimmed.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Decode a transaction from any supported encoding and produce a structured report.
 pub fn decode_transaction(input: &str, idl: Option<&IdlJson>) -> Result<TransactionReport> {
-    let encoding = detect_encoding(input);
-    let raw_bytes = encoding::decode_from_encoding(input, encoding)?;
-    decode_raw_bytes(&raw_bytes, idl)
+    decode_input(input.as_bytes(), idl).map(|(_, report)| report)
 }
 
 fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Result<TransactionReport> {

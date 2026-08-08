@@ -1,0 +1,37 @@
+# cargo-deny configuration. Run with: cargo deny check
+
+[advisories]
+# Mirrors .cargo/audit.toml: bincode 1.x is unmaintained but required by
+# solana-sdk v4 for legacy wire-format compatibility; async-std is dev-only
+# via httpmock.
+ignore = [
+    "RUSTSEC-2025-0141",
+    "RUSTSEC-2025-0052",
+]
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    # r-efi (UEFI bindings via aya/agave-xdp) — not compiled for our targets.
+    "LGPL-2.1-or-later",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[bans]
+# Multiple versions are expected in the solana modular-crate tree (e.g.
+# windows-sys, solana-account); warn so upgrades can consolidate them.
+multiple-versions = "warn"

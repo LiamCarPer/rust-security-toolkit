@@ -178,6 +178,10 @@ mod mainnet_fixture_tests {
                     ix.program_id
                 );
             }
+
+            // The differential decode gate must also hold for real mainnet txs.
+            let warnings = decoder::validate_decoding(&raw_bytes, &report_hex).expect("validate_decoding must succeed");
+            assert!(warnings.is_empty(), "{}: validate-decoding warnings: {:?}", path.display(), warnings);
         }
     }
 }

@@ -125,6 +125,17 @@ fn test_decode_raw_binary_fixture() {
     assert_eq!(report.instructions[0].instruction_name.as_deref(), Some("Transfer"));
 }
 
+/// All-hex even-length text is ambiguous (Hex vs Base58 vs Base64): the primary
+/// Hex interpretation fails to deserialize, the alternatives are retried, and
+/// the primary error is surfaced.
+#[test]
+fn test_decode_input_ambiguous_hex_text() {
+    // "deadbeef" is valid hex, valid base58, and valid padding-less base64 —
+    // none of the three interpretations deserialize as a transaction.
+    let result = decoder::decode_input(b"deadbeef", None);
+    assert!(result.is_err(), "ambiguous hex text must not decode as a transaction");
+}
+
 // ── Validator Tests ──────────────────────────────────────────────────────────
 
 fn make_report() -> TransactionReport {
@@ -559,35 +570,48 @@ fn generate_fixtures() {
 #[test]
 fn test_decode_legacy_transfer_fixture() {
     let hex_encoded = read_fixture("tests/fixtures/system_transfer.hex");
-    let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode legacy fixture");
+    let raw_bytes = hex::decode(hex_encoded.trim()).expect("Decode fixture hex");
+    let report = decoder::decode_raw_bytes(&raw_bytes, None).expect("Decode legacy fixture");
     assert_eq!(report.message_version, None);
     assert_eq!(report.instructions.len(), 1);
     assert_eq!(report.instructions[0].program_name, "System Program");
     assert_eq!(report.instructions[0].instruction_name.as_deref(), Some("Transfer"));
     assert!(report.signatures.len() == 1);
+
+    // The differential decode gate must hold for the committed fixtures.
+    let warnings = decoder::validate_decoding(&raw_bytes, &report).expect("validate_decoding should succeed");
+    assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
 }
 
 /// Decode the committed v0 transfer fixture and verify version field.
 #[test]
 fn test_decode_v0_transfer_fixture() {
     let hex_encoded = read_fixture("tests/fixtures/v0_transfer.hex");
-    let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode v0 fixture");
+    let raw_bytes = hex::decode(hex_encoded.trim()).expect("Decode fixture hex");
+    let report = decoder::decode_raw_bytes(&raw_bytes, None).expect("Decode v0 fixture");
     assert_eq!(report.message_version, Some(0));
     assert_eq!(report.instructions.len(), 1);
     assert_eq!(report.instructions[0].instruction_name.as_deref(), Some("Transfer"));
+
+    let warnings = decoder::validate_decoding(&raw_bytes, &report).expect("validate_decoding should succeed");
+    assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
 }
 
 /// Decode the committed compute budget fixture and verify CU analysis.
 #[test]
 fn test_decode_compute_budget_fixture() {
     let hex_encoded = read_fixture("tests/fixtures/compute_budget_transfer.hex");
-    let report = decoder::decode_transaction(&hex_encoded, None).expect("Decode CU fixture");
+    let raw_bytes = hex::decode(hex_encoded.trim()).expect("Decode fixture hex");
+    let report = decoder::decode_raw_bytes(&raw_bytes, None).expect("Decode CU fixture");
     assert_eq!(report.instructions.len(), 3);
-    let cb = report.compute_budget.expect("Should have compute budget info");
+    let cb = report.compute_budget.as_ref().expect("Should have compute budget info");
     assert!(cb.compute_unit_limit_set);
     assert_eq!(cb.compute_unit_limit, 150_000);
     assert_eq!(cb.compute_unit_price, 5_000);
     assert!(!cb.is_reordered);
+
+    let warnings = decoder::validate_decoding(&raw_bytes, &report).expect("validate_decoding should succeed");
+    assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
 }
 
 /// Legacy transaction with 150 distinct accounts exercises the 2-byte

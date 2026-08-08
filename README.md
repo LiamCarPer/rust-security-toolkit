@@ -169,10 +169,16 @@ cargo test --test simulation
 
 # Run mainnet fixture round-trip tests (offline; skips if no fixtures committed)
 cargo test --test mainnet_fixtures
+
+# Run property tests (no-panic, differential gate, encoding round-trips)
+cargo test --test properties
+
+# Fuzz the decoder (requires nightly):
+cargo +nightly fuzz run decode
 ```
 
 Test coverage:
-- **80 tests** (unit, integration, CLI e2e, mocked program verification + simulation + ALT resolution, mainnet round-trip)
+- **86 tests** (unit, integration, CLI e2e, mocked program verification + simulation + ALT resolution, mainnet round-trip, property tests)
 - Encoding detection for all four formats (Base58, Base64, Hex, Raw)
 - Transaction round-trip: legacy, v0, and compute budget fixtures
 - Mainnet round-trip: 30 committed mainnet transactions decoded across all four encodings with byte-identical reports
@@ -181,6 +187,7 @@ Test coverage:
 - Simulation: mocked RPC success, program error, CU exhaustion, and RPC error scenarios
 - ALT resolution: mocked RPC success, not-found, error, and out-of-bounds scenarios
 - Input handling: raw binary transactions via `--file` and stdin
+- Property tests: no-panic over arbitrary bytes, differential decode gate and encoding round-trips over random valid transactions, IDL arg decoding
 - Differential decoding gate: 150-account legacy, v0, and v0-with-ALT transactions parse with zero warnings
 - CLI end-to-end: JSON output, stdin piping, `--output-tx-report`, `--validate-decoding`, `--no-network`
 

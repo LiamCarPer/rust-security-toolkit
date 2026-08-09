@@ -91,7 +91,7 @@ fn msrm_metas(owner_is_signer: bool, vault_is_writable: bool) -> Vec<AccountMeta
     ]
 }
 
-// â”€â”€ WithdrawMsrm: signer / writable roles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── WithdrawMsrm: signer / writable roles ───────────────────────────────────
 
 #[test]
 fn withdraw_msrm_correct_signers_no_flags() {
@@ -142,7 +142,7 @@ fn withdraw_msrm_writable_mismatch_warning() {
     assert!(native_flags(&report, &RiskCategory::MissingSigner).is_empty());
 }
 
-// â”€â”€ withdraw_escrow: PDA seed cross-check (tier 2) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── withdraw_escrow: PDA seed cross-check (tier 2) ───────────────────────────
 
 /// The doc's program_id is the fixture's [1u8; 32] gate; these tests run a
 /// *different* deterministic program id, so they build a local doc and
@@ -200,7 +200,7 @@ fn withdraw_escrow_pda_match_no_flags() {
     assert_eq!(pda.bump, Some(bump));
 }
 
-// â”€â”€ withdraw_dynamic: runtime-value seeds cannot be verified statically â”€â”€â”€â”€â”€â”€
+// ── withdraw_dynamic: runtime-value seeds cannot be verified statically ──────
 
 #[test]
 fn withdraw_dynamic_cannot_verify_warning() {
@@ -220,7 +220,7 @@ fn withdraw_dynamic_cannot_verify_warning() {
     assert!(!report.risk_flags.iter().any(|f| f.severity == RiskSeverity::Critical), "no Critical flags");
 }
 
-// â”€â”€ Discriminator matching and program_id gating â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Discriminator matching and program_id gating ─────────────────────────────
 
 #[test]
 fn unknown_discriminator_no_match() {
@@ -261,7 +261,7 @@ fn mango_style_1byte_tag_round_trip() {
     assert_no_native_flags(&report);
 }
 
-// â”€â”€ Account count and tier-1 well-formedness â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Account count and tier-1 well-formedness ─────────────────────────────────
 
 #[test]
 fn account_count_mismatch_warning() {
@@ -307,7 +307,7 @@ fn tier1_empty_pda_seeds_warning() {
     assert!(wellformed[0].message.contains("empty_pda"), "message: {}", wellformed[0].message);
 }
 
-// â”€â”€ Cross-program transactions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Cross-program transactions ───────────────────────────────────────────────
 
 #[test]
 fn cross_program_instruction_not_named() {

@@ -19,6 +19,14 @@ All notable changes to this project are documented in this file.
 - **Fetch by signature**: --signature BASE58 (requires --rpc) fetches the
   transaction via getTransaction and runs the full analysis pipeline
 - **Pattern config**: --patterns PATH JSON enables per-rule severity overrides
+- **Native program expectations** (--expectations): consumes sat native expectations
+  documents as the IDL analog for IDL-less programs; 1-byte/8-byte discriminator
+  matching (expectations_decoder), positional account roles, static PDA seeds,
+  and native tier-1/tier-2 validator checks (missing signer, writable role,
+  account count, PDA well-formedness and seed cross-reference)
+- **Writable header fix**: readonly-signer messages now derive account writability
+  exactly like the runtime is_writable_index (previously every readonly signer
+  was mislabeled writable)
   and disabling for the five pattern rules; unknown keys/severities are hard errors
 - **Transaction-layer pattern detection** (`src/patterns.rs`): approve-then-
   transfer delegate drain, non-signing token transfer authorities, fee payer

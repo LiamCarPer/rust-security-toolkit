@@ -12,6 +12,7 @@
 - **Multi-encoding decode** — Auto-detects and decodes Base58, Base64, hexadecimal, and raw binary transaction encodings (raw binary works from `--file` and stdin). Supports legacy and v0 versioned transactions with Address Lookup Table (ALT) resolution — actual table pubkeys are fetched on-chain when `--rpc` is provided, with `<alt_index_N>` placeholders offline.
 - **Named instruction decoding** — Parses System Program, SPL Token, Token-2022 (including transfer fee, confidential transfer, permanent delegate, and mint close authority extensions), Associated Token Program, and Compute Budget instructions. Matches Anchor IDL 8-byte discriminators for custom programs.
 - **IDL-aligned structural validation** — PDA seed verification (tier 1 well-formedness + tier 2 runtime seed cross-reference), missing signer detection, insecure writable account flagging, compute unit analysis (missing limits, reordering, high-CU detection), and ALT integrity checks.
+- **Native program expectations** - --expectations <PATH> accepts sat's native expectations export (the IDL analog for programs that ship none, e.g. Mango): 1-byte/8-byte discriminator matching, positional account roles, static PDA seeds, signer/writable/account-count checks, and tier-1/tier-2 PDA validation.
 - **Transaction simulation** — Calls `simulateTransaction` via RPC to check if the transaction would execute at the current chain tip, reporting CU consumption, program error logs, and custom error codes.
 - **Transaction-layer pattern detection** — Flags multi-instruction attack-shaped flows: approve-then-transfer (delegate drain), non-signing transfer authorities, fee-payer-as-recipient, repeated destinations, and mint-authority takeover paired with minting in one transaction.
 - **Simulation↔decode cross-reference** — With `--rpc`, compares the simulation against the local decode: failing instruction index agreement, CU consumed vs declared limit, log-to-instruction invocation counts, and the *actual* (not worst-case) priority fee from `units_consumed`.
@@ -131,6 +132,7 @@ Arguments:
 Options:
   -f, --file <PATH>               Read transaction bytes from a file
       --idl <PATH>                 Anchor IDL JSON for instruction decoding and validation
+      --expectations <PATH>        Native program expectations JSON (sat export); mutually exclusive with --idl
       --rpc <URL>                  RPC endpoint for simulation and on-chain verification
       --signature <BASE58>          Fetch and analyze a transaction by base58 signature (requires --rpc)
       --patterns <PATH>             Pattern detection config JSON (per-rule severity overrides)

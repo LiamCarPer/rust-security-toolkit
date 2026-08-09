@@ -1,0 +1,98 @@
+[
+  {
+    "file": "00.b64",
+    "signature": "57XgeW4u1XXF9oRTVACCrq2vLL8pWHTMQtYYgAAw85W2vFKLTusmavQ8ahSX3s7Prw7Dk1ShF1fHiiwczxJfvuha",
+    "source": "mainnet",
+    "expected_categories": [],
+    "expected_min_flags": 0,
+    "notes": "Token-2022 CloseAccount + compute budget; clean real mainnet tx"
+  },
+  {
+    "file": "01.b64",
+    "signature": "4kdbewZVVxjVnzyXmVUbP4igV3kZ9763RjLMembXA84WcPjaQ7jj1QQt8SY9Qs86R5LyucSLbWPff97bo6r9yc5T",
+    "source": "mainnet",
+    "expected_categories": [],
+    "expected_min_flags": 0,
+    "notes": "Token-2022 CloseAccount + System transfer; clean real mainnet tx"
+  },
+  {
+    "file": "02.b64",
+    "signature": "5ygWkPWihA4fpqjD9vLzuKeJHrkkLxJG11tsoNoqyzy2Hj6ZSpMNfop3PJP9HNbNuGS5Wqr27cWKev1GQ9QGo6s2",
+    "source": "mainnet",
+    "expected_categories": ["compute_budget_reordering", "high_compute_unit_usage"],
+    "expected_min_flags": 3,
+    "notes": "Token-2022 TransferChecked; compute budget instructions reordered after program instructions"
+  },
+  {
+    "file": "03.b64",
+    "signature": "HDZMp3yXmJMhh7U5YRfYUoVewD5veR3BemmEQfKsnYLhiAvJiPbCu6VnWNBTZrcVivanoNzNMVaAXgAjHXWzW33",
+    "source": "mainnet",
+    "expected_categories": ["missing_compute_unit_limit"],
+    "expected_min_flags": 1,
+    "notes": "No SetComputeUnitLimit set; defaults to 200k CU"
+  },
+  {
+    "file": "04.b64",
+    "signature": "5faEP9v6n2EbjsbCx67KwskLvVPPnXCPh5hx1ouiJpzix7dRfeHp5on6thyXwFHBnGPVQYqxCZC9icqjZTdyHP9R",
+    "source": "mainnet",
+    "expected_categories": ["high_compute_unit_usage"],
+    "expected_min_flags": 1,
+    "notes": "Multi-ATA create + CloseAccount sweep with high-CU estimates"
+  },
+  {
+    "file": "05.b64",
+    "signature": "43WDzuv2c9C7Xuo4A4j7U9EtcBdsHUeySmAGSmgmuJgNmAnG2NjBQpzC857mNERiREEsLySsnWyqKWEy9JKAQ8LM",
+    "source": "mainnet",
+    "expected_categories": ["high_compute_unit_usage"],
+    "expected_min_flags": 8,
+    "notes": "14-instruction close sweep with 8 high-CU estimates"
+  },
+  {
+    "file": "06.b64",
+    "signature": "2csXJWU819iPU1t5NTSCXvw5XH55CGFBuBmP9CAnAdfihZeoXsVdhef7fUsuouAuxxNTyC4Qr7MHJtkqwbM82Jv7",
+    "source": "synthetic",
+    "expected_categories": ["pattern_detection"],
+    "expected_min_flags": 1,
+    "notes": "approve_then_transfer(Warning)"
+  },
+  {
+    "file": "07.b64",
+    "signature": "3THJrboU6AswsHK4zBFPnwmh1CvgneyGDsBBDw6vx1E6sT14YLjBn1hPxn2np3bknGp2dum1dbqextxyDsEwb8k",
+    "source": "synthetic",
+    "expected_categories": ["pattern_detection"],
+    "expected_min_flags": 1,
+    "notes": "approve_then_transfer(Warning)"
+  },
+  {
+    "file": "08.b64",
+    "signature": "YZ9DjBn5JBYAWNDYYdUVTCKDFGnLQAX2Aq8z4xxV1ah1uYXw5asMKfKA4WnJ7hpYcF6AScizqRUpokjZdRfdGT9",
+    "source": "synthetic",
+    "expected_categories": ["pattern_detection"],
+    "expected_min_flags": 1,
+    "notes": "mint_authority_takeover(Warning)"
+  },
+  {
+    "file": "09.b64",
+    "signature": "XQesobQXFDuQCPHUJJCZvB3f7QNsqpcdQLc8fG6uWwGn8SeVd9VEiKDtLdZSB8tTW1zJ2g9ERZR2Z8JhRf5vx1A",
+    "source": "synthetic",
+    "expected_categories": ["pattern_detection"],
+    "expected_min_flags": 1,
+    "notes": "nonsigner_transfer_authority(Warning)"
+  },
+  {
+    "file": "10.b64",
+    "signature": "3xTxmrEZf1iKzWuZjSMTvBELiNcNSoz2e7kyvEj2FFZpwyJvLToAeYmsAeW5w4x66syNFCeqZWhz1xoTCgmchDrC",
+    "source": "synthetic",
+    "expected_categories": ["pattern_detection"],
+    "expected_min_flags": 2,
+    "notes": "nonsigner_transfer_authority(Warning); fee_payer_recipient(Info)"
+  },
+  {
+    "file": "11.b64",
+    "signature": "5Q4jQVrnVmukS7c5wHxdknTXNxcNXkbcWk7zm7LdNhu4Fug8qCooUz1wkg3QF11mMBLaxtkUQrYobpikPxpRkSAX",
+    "source": "synthetic",
+    "expected_categories": ["pattern_detection"],
+    "expected_min_flags": 3,
+    "notes": "nonsigner_transfer_authority(Warning); repeated_destination(Info)"
+  }
+]

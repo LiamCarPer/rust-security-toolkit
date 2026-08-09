@@ -2,6 +2,7 @@ pub mod account_roles;
 pub mod anchor_decoder;
 pub mod decoder;
 pub mod encoding;
+pub mod expectations_decoder;
 pub mod instruction_decoder;
 pub mod internal_parser;
 pub mod patterns;

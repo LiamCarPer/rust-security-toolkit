@@ -268,16 +268,11 @@ mod cli_e2e_tests {
     }
 
     /// WithdrawMsrm metas: mango_group readonly, owner (signer per
-    /// `owner_is_signer`), vault writable.
-    ///
-    /// NOTE: `owner` is a *writable* signer (AccountMeta::new) although the
-    /// fixture declares it readonly: the committed decoder misderives header
-    /// writability for readonly signers (see report), and a writable owner
-    /// keeps the header math correct (num_readonly_signed == 0).
+    /// `owner_is_signer`, readonly like the real Mango shape), vault writable.
     fn msrm_metas(owner_is_signer: bool) -> Vec<AccountMeta> {
         vec![
             AccountMeta::new_readonly(Pubkey::new_unique(), false),
-            AccountMeta::new(Pubkey::new_unique(), owner_is_signer),
+            AccountMeta::new_readonly(Pubkey::new_unique(), owner_is_signer),
             AccountMeta::new(Pubkey::new_unique(), false),
         ]
     }
@@ -367,5 +362,24 @@ mod cli_e2e_tests {
         assert!(!output.status.success(), "clap must reject --idl + --expectations together");
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("cannot be used with"), "clap conflict wording missing, stderr: {}", stderr);
+    }
+
+    /// A non-"native" source under --expectations bails with a clear error
+    /// before any decoding happens.
+    #[test]
+    fn test_cli_expectations_rejects_non_native_source() {
+        use std::io::Write;
+        let path = std::env::temp_dir().join(format!("rts_non_native_{}.json", std::process::id()));
+        let mut f = std::fs::File::create(&path).expect("create temp file");
+        f.write_all(b"{\"program_name\":\"p\",\"program_id\":null,\"source\":\"anchor\",\"instructions\":[]}")
+            .expect("write temp file");
+        let tx_hex = build_tx_hex(expectations_program_id(), msrm_metas(true), vec![0x24]);
+
+        let output = rts_binary().arg("--expectations").arg(&path).arg(&tx_hex).output().expect("run rts");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(output.status.code(), Some(1), "non-native source must exit 1");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("requires a native expectations document"), "clear error expected, stderr: {}", stderr);
     }
 }

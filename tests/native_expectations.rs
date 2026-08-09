@@ -77,18 +77,12 @@ fn assert_no_native_flags(report: &TransactionReport) {
 }
 
 /// WithdrawMsrm account metas: [mango_group readonly, owner (signer per
-/// `owner_is_signer`), vault (writable per `vault_is_writable`)].
-///
-/// NOTE: `owner` is built with `AccountMeta::new` (writable) even though the
-/// fixture declares `is_writable_expected: false` (readonly). The committed
-/// decoder misderives message-header writability whenever a readonly signer
-/// exists (src/decoder.rs, see report); a writable owner keeps
-/// num_readonly_signed == 0 so the header math is correct and the validator
-/// sees the vault as writable.
+/// `owner_is_signer`, readonly like the real Mango shape), vault (writable
+/// per `vault_is_writable`)].
 fn msrm_metas(owner_is_signer: bool, vault_is_writable: bool) -> Vec<AccountMeta> {
     vec![
         AccountMeta::new_readonly(Pubkey::new_unique(), false),
-        AccountMeta::new(Pubkey::new_unique(), owner_is_signer),
+        AccountMeta::new_readonly(Pubkey::new_unique(), owner_is_signer),
         if vault_is_writable {
             AccountMeta::new(Pubkey::new_unique(), false)
         } else {
@@ -160,10 +154,9 @@ fn escrow_schema(program_id: &Pubkey) -> ProgramSchema {
 }
 
 fn escrow_metas(escrow: Pubkey) -> Vec<AccountMeta> {
-    // authority as a *writable* signer: same decoder-bug workaround as
-    // `msrm_metas` (keeps num_readonly_signed == 0 so the escrow's writable
-    // role is derived correctly).
-    vec![AccountMeta::new(escrow, false), AccountMeta::new(Pubkey::new_unique(), true)]
+    // authority is a readonly signer (real Mango shape); the writable-header
+    // derivation handles readonly signers since 98020e5.
+    vec![AccountMeta::new(escrow, false), AccountMeta::new_readonly(Pubkey::new_unique(), true)]
 }
 
 #[test]

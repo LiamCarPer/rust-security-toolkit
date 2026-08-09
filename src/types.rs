@@ -192,6 +192,12 @@ pub enum RiskCategory {
     /// A message signature failed offline verification (tampered, missing,
     /// or mismatched signer); fee-payer failures are Critical.
     SignatureMismatch,
+    /// A transaction account expected to be writable (per native program
+    /// expectations) is not marked writable in the message header.
+    WritableMismatch,
+    /// A native instruction's compiled account list is longer than the
+    /// expectations document declares; positional mapping may be misaligned.
+    NativeAccountMismatch,
 }
 
 /// Per-rule pattern configuration. Severity strings are parsed by the
@@ -345,4 +351,128 @@ pub fn is_sysvar_id(pubkey: &str) -> bool {
 #[allow(dead_code)]
 pub fn is_known_program_id(pubkey: &str) -> bool {
     KNOWN_PROGRAM_IDS.contains(&pubkey)
+}
+
+// ── Native program expectations (sat --expectations export) ───────────────────
+
+/// Mirror of `sat`'s native expectations document (`ExpectationsDoc` in
+/// solana-audit-toolkit/crates/sat/src/native/expectations.rs). This is the
+/// native analog of an Anchor IDL: `rts` consumes it to run tier-1/tier-2
+/// checks (signer presence, writable roles, PDA seed cross-reference)
+/// against real transactions of programs that ship no IDL.
+///
+/// Contract notes (from sat's exporter):
+/// - `source` is always `"native"`; `instructions[].accounts[]` maps 1:1 to
+///   the instruction's account order (positional `AccountMeta` order).
+/// - `pda.seeds` contains only seeds that are *statically* verifiable (string
+///   or integer literals); `pda.dynamic_seed_count` counts seed expressions
+///   that depend on runtime values and can only be verified on-chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpectationsDoc {
+    pub program_name: String,
+    pub program_id: Option<String>,
+    pub source: String,
+    #[serde(default)]
+    pub instructions: Vec<ExpectationInstruction>,
+}
+
+impl ExpectationsDoc {
+    pub fn find_instruction(&self, ix_name: &str) -> Option<&ExpectationInstruction> {
+        self.instructions.iter().find(|ix| ix.name == ix_name)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpectationInstruction {
+    pub name: String,
+    /// 8-byte hex for byte-match dispatch; 1-byte hex for u8-tag fallback
+    /// (e.g. Mango's `MangoInstruction::unpack(data[0])`).
+    pub discriminator_hex: Option<String>,
+    pub handler: String,
+    pub accounts: Vec<ExpectationAccount>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpectationAccount {
+    pub name: String,
+    /// 1:1 with the instruction's AccountMeta order.
+    pub index: usize,
+    pub is_signer_expected: bool,
+    pub is_writable_expected: bool,
+    pub pda: Option<ExpectationPda>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpectationPda {
+    /// Statically verifiable seeds (string/integer literals).
+    pub seeds: Vec<String>,
+    /// Seed expressions that depend on runtime values.
+    #[serde(default)]
+    pub dynamic_seed_count: usize,
+}
+
+/// A validated schema for a program's instruction set: either an Anchor IDL
+/// or sat's native expectations export. Mutually exclusive in the CLI
+/// (`--idl` vs `--expectations`); the decoder and validator branch on this.
+#[derive(Debug, Clone)]
+pub enum ProgramSchema {
+    Idl(IdlJson),
+    Native(ExpectationsDoc),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MANGO_STYLE_EXPECTATIONS: &str = r#"{
+      "program_name": "program",
+      "program_id": "AvtB6w9xboLwA145E221vhof5TddhqsChYcx7Fy3xVMH",
+      "source": "native",
+      "instructions": [
+        {
+          "name": "WithdrawMsrm",
+          "discriminator_hex": "24",
+          "handler": "withdraw_msrm",
+          "accounts": [
+            {"name": "owner_ai", "index": 2, "is_signer_expected": true, "is_writable_expected": false, "pda": null},
+            {"name": "mango_account_ai", "index": 1, "is_signer_expected": false, "is_writable_expected": true, "pda": null}
+          ]
+        },
+        {
+          "name": "withdraw_escrow",
+          "discriminator_hex": "25",
+          "handler": "withdraw_escrow",
+          "accounts": [
+            {"name": "escrow", "index": 0, "is_signer_expected": false, "is_writable_expected": true,
+             "pda": {"seeds": ["escrow"], "dynamic_seed_count": 1}}
+          ]
+        }
+      ]
+    }"#;
+
+    #[test]
+    fn parses_native_expectations_doc() {
+        let doc: ExpectationsDoc = serde_json::from_str(MANGO_STYLE_EXPECTATIONS).expect("parse expectations");
+        assert_eq!(doc.source, "native");
+        assert_eq!(doc.program_id.as_deref(), Some("AvtB6w9xboLwA145E221vhof5TddhqsChYcx7Fy3xVMH"));
+        assert_eq!(doc.instructions.len(), 2);
+
+        let msrm = doc.find_instruction("WithdrawMsrm").expect("find WithdrawMsrm");
+        assert_eq!(msrm.discriminator_hex.as_deref(), Some("24"));
+        assert_eq!(msrm.handler, "withdraw_msrm");
+        let owner = &msrm.accounts[0];
+        assert_eq!(owner.name, "owner_ai");
+        assert_eq!(owner.index, 2);
+        assert!(owner.is_signer_expected);
+        assert!(!owner.is_writable_expected);
+        assert!(owner.pda.is_none());
+        assert!(!msrm.accounts[1].is_signer_expected);
+        assert!(msrm.accounts[1].is_writable_expected);
+
+        let escrow = doc.find_instruction("withdraw_escrow").expect("find withdraw_escrow");
+        let pda = escrow.accounts[0].pda.as_ref().expect("escrow pda");
+        assert_eq!(pda.seeds, vec!["escrow".to_string()]);
+        assert_eq!(pda.dynamic_seed_count, 1);
+        assert!(doc.find_instruction("nope").is_none());
+    }
 }

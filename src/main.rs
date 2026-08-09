@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 
-use rust_security_toolkit::types::{IdlJson, RiskSeverity, TransactionReport};
+use rust_security_toolkit::types::{ExpectationsDoc, IdlJson, ProgramSchema, RiskSeverity, TransactionReport};
 use rust_security_toolkit::{decoder, patterns, sim_crossref, simulator, ui, validator};
 
 #[derive(Parser)]
@@ -26,6 +26,10 @@ struct Cli {
     /// Anchor IDL JSON for named instruction decoding and validation
     #[arg(long = "idl", value_name = "PATH")]
     idl: Option<PathBuf>,
+
+    /// Native program expectations JSON (sat --expectations export); mutually exclusive with --idl
+    #[arg(long = "expectations", value_name = "PATH", conflicts_with = "idl")]
+    expectations: Option<PathBuf>,
 
     /// RPC endpoint URL for simulation and on-chain verification
     #[arg(long = "rpc", value_name = "URL")]
@@ -85,8 +89,30 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    let (raw_bytes_decoded, mut report) = decoder::decode_input(&input_bytes, idl.as_ref())?;
-    validator::validate(&mut report, idl.as_ref());
+    let expectations: Option<ExpectationsDoc> = match &cli.expectations {
+        Some(path) => {
+            let contents = std::fs::read_to_string(path).context("Failed to read expectations file")?;
+            let doc: ExpectationsDoc = serde_json::from_str(&contents).context("Failed to parse expectations JSON")?;
+            if doc.source != "native" {
+                anyhow::bail!(
+                    "--expectations requires a native expectations document (source = \"native\", got {:?})",
+                    doc.source
+                );
+            }
+            Some(doc)
+        }
+        None => None,
+    };
+
+    let schema: Option<ProgramSchema> = match (idl, expectations) {
+        (Some(idl), None) => Some(ProgramSchema::Idl(idl)),
+        (None, Some(exp)) => Some(ProgramSchema::Native(exp)),
+        (None, None) => None,
+        (Some(_), Some(_)) => anyhow::bail!("--idl and --expectations are mutually exclusive"),
+    };
+
+    let (raw_bytes_decoded, mut report) = decoder::decode_input(&input_bytes, schema.as_ref())?;
+    validator::validate(&mut report, schema.as_ref());
     let pattern_flags = patterns::detect_patterns(&report);
     report.risk_flags.extend(pattern_flags);
 
@@ -136,7 +162,14 @@ async fn main() -> Result<()> {
     simulator::resolve_token_amounts(cli.rpc.as_deref(), &mut report).await;
 
     if let Some(ref output_path) = cli.output_tx_report {
-        let report_json = ui::render_tx_report(&report, idl.as_ref().map(|i| i.name.as_str()).unwrap_or(""));
+        let program_name = schema
+            .as_ref()
+            .map(|s| match s {
+                ProgramSchema::Idl(idl) => idl.name.as_str(),
+                ProgramSchema::Native(exp) => exp.program_name.as_str(),
+            })
+            .unwrap_or("");
+        let report_json = ui::render_tx_report(&report, program_name);
         std::fs::write(output_path, report_json).context("Failed to write tx-report output")?;
     }
 
@@ -166,7 +199,9 @@ fn worst_severity_exit_code(report: &TransactionReport) -> u8 {
 #[cfg(test)]
 mod tests {
     use crate::worst_severity_exit_code;
-    use rust_security_toolkit::types::{RiskCategory, RiskFlag, RiskSeverity, TransactionReport};
+    use rust_security_toolkit::types::{
+        ExpectationsDoc, ProgramSchema, RiskCategory, RiskFlag, RiskSeverity, TransactionReport,
+    };
 
     fn report_with_flags(severities: &[RiskSeverity]) -> TransactionReport {
         let risk_flags = severities
@@ -214,5 +249,29 @@ mod tests {
     #[test]
     fn critical_flag_exit_two() {
         assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Critical])), 2);
+    }
+
+    #[test]
+    fn expectations_doc_source_validation() {
+        let doc: ExpectationsDoc =
+            serde_json::from_str(r#"{"program_name":"p","program_id":null,"source":"anchor","instructions":[]}"#)
+                .expect("parse doc");
+        assert_eq!(doc.source, "anchor");
+    }
+
+    #[test]
+    fn program_schema_native_variant_roundtrip() {
+        let exp: ExpectationsDoc = serde_json::from_str(
+            r#"{"program_name":"p","program_id":null,"source":"native","instructions":[
+                {"name":"DoThing","discriminator_hex":"42","handler":"do_thing","accounts":[]}
+            ]}"#,
+        )
+        .expect("parse doc");
+        let schema = ProgramSchema::Native(exp);
+        let ProgramSchema::Native(exp) = &schema else {
+            panic!("expected Native variant");
+        };
+        assert!(exp.find_instruction("DoThing").is_some());
+        assert!(exp.find_instruction("Nope").is_none());
     }
 }

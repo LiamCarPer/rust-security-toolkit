@@ -10,13 +10,43 @@ cargo-fuzz = true
 [workspace]
 
 [dependencies]
+bincode = "1"
 libfuzzer-sys = "0.4"
 rust-security-toolkit = { path = ".." }
 serde_json = "1"
+solana-sdk = "=4.0.1"
 
 [[bin]]
 name = "decode"
 path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "patterns"
+path = "fuzz_targets/patterns.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sim_crossref"
+path = "fuzz_targets/sim_crossref.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "expectations"
+path = "fuzz_targets/expectations.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "signature_verify"
+path = "fuzz_targets/signature_verify.rs"
 test = false
 doc = false
 bench = false

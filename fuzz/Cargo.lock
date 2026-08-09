@@ -2946,6 +2946,7 @@ dependencies = [
  "solana-hash 4.3.0",
  "solana-instruction",
  "solana-keypair",
+ "solana-loader-v3-interface",
  "solana-message",
  "solana-program",
  "solana-pubkey 4.2.0",
@@ -2967,9 +2968,11 @@ dependencies = [
 name = "rust-security-toolkit-fuzz"
 version = "0.0.0"
 dependencies = [
+ "bincode",
  "libfuzzer-sys",
  "rust-security-toolkit",
  "serde_json",
+ "solana-sdk",
 ]
 
 [[package]]

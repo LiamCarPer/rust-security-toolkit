@@ -2,8 +2,19 @@ use base64::Engine;
 use proptest::prelude::*;
 use rust_security_toolkit::anchor_decoder::decode_anchor_args;
 use rust_security_toolkit::decoder;
+use rust_security_toolkit::expectations_decoder::decode_instruction;
+use rust_security_toolkit::expectations_decoder::match_expectation;
 use rust_security_toolkit::instruction_decoder::decode_instruction_data;
+use rust_security_toolkit::patterns::detect_patterns;
+use rust_security_toolkit::patterns::detect_patterns_with_config;
+use rust_security_toolkit::signature_verify::verify_report;
+use rust_security_toolkit::signature_verify::verify_transaction;
+use rust_security_toolkit::sim_crossref::cross_reference;
+use rust_security_toolkit::types::ExpectationsDoc;
 use rust_security_toolkit::types::IdlArg;
+use rust_security_toolkit::types::PatternConfig;
+use rust_security_toolkit::types::PatternRuleOverride;
+use rust_security_toolkit::types::TransactionReport;
 use solana_sdk::{
     hash::Hash,
     instruction::{AccountMeta, Instruction},
@@ -92,6 +103,100 @@ fn tx_strategy() -> impl Strategy<Value = Vec<u8>> {
     )
 }
 
+fn any_report() -> impl Strategy<Value = TransactionReport> {
+    (
+        any::<String>(),
+        prop::collection::vec(any::<String>(), 0..8),
+        prop::collection::vec(any::<String>(), 0..8),
+        prop::collection::vec(any::<String>(), 0..8),
+        any::<u64>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+    )
+        .prop_map(|(fee_payer, program_ids, pubkeys, log_lines, cu, with_budget, with_sim, with_checks)| {
+            let instructions: Vec<serde_json::Value> = program_ids
+                .iter()
+                .zip(pubkeys.iter())
+                .enumerate()
+                .map(|(i, (pid, name))| {
+                    serde_json::json!({
+                        "index": i,
+                        "program_id": pid,
+                        "program_name": name,
+                        "instruction_name": name,
+                        "accounts": [{
+                            "name": "authority",
+                            "pubkey": fee_payer,
+                            "account_index": 0,
+                            "is_signer": false,
+                            "is_writable": true
+                        }],
+                        "data": null,
+                        "raw_data_hex": "",
+                        "token_amount": null
+                    })
+                })
+                .collect();
+            let compute_budget = with_budget.then(|| {
+                serde_json::json!({
+                    "compute_unit_limit": 200_000,
+                    "compute_unit_price": 0,
+                    "compute_unit_limit_set": true,
+                    "compute_budget_positions": [0],
+                    "is_reordered": false,
+                    "high_cu_instructions": [],
+                    "priority_fee_lamports": 0,
+                    "priority_fee_actual": null
+                })
+            });
+            let simulation = with_sim.then(|| {
+                serde_json::json!({
+                    "success": false,
+                    "error": "Custom(1)",
+                    "logs": log_lines,
+                    "units_consumed": cu,
+                    "return_data": null,
+                    "error_code": "Custom(1)",
+                    "error_instruction_index": null,
+                    "instruction_cu": []
+                })
+            });
+            let signature_verification = if with_checks {
+                serde_json::json!([{
+                    "index": 0,
+                    "pubkey": fee_payer,
+                    "verified": false,
+                    "note": "missing signature"
+                }])
+            } else {
+                serde_json::json!([])
+            };
+            serde_json::from_value::<TransactionReport>(serde_json::json!({
+                "status": "DECODED SUCCESSFULLY",
+                "fee_payer": fee_payer,
+                "signatures": [],
+                "recent_blockhash": "",
+                "message_version": null,
+                "accounts": [],
+                "instructions": instructions,
+                "address_lookup_tables": [],
+                "compute_budget": compute_budget,
+                "risk_flags": [],
+                "simulation": simulation,
+                "warnings": [],
+                "signature_verification": signature_verification
+            }))
+            .expect("constructed report must deserialize")
+        })
+}
+
+fn expectations_doc() -> ExpectationsDoc {
+    let raw =
+        std::fs::read_to_string("tests/fixtures/native_expectations.json").expect("expectations fixture must exist");
+    serde_json::from_str(&raw).expect("expectations fixture must parse")
+}
+
 proptest! {
     /// Arbitrary bytes must never panic the canonical decode paths.
     #[test]
@@ -155,5 +260,71 @@ proptest! {
         let (raw, r) = decoder::decode_input(&tx_bytes, None).expect("raw decode");
         prop_assert_eq!(raw, tx_bytes);
         prop_assert_eq!(canonical, serde_json::to_string(&r).unwrap());
+    }
+
+    #[test]
+    fn no_panic_patterns_any_report(report in any_report()) {
+        let _ = detect_patterns(&report);
+    }
+
+    #[test]
+    fn no_panic_cross_reference_any_report(report in any_report()) {
+        let mut report = report;
+        let _ = cross_reference(&mut report);
+    }
+
+    #[test]
+    fn no_panic_expectations_matching(
+        program_id in any::<String>(),
+        data in prop::collection::vec(any::<u8>(), 0..64),
+    ) {
+        let doc = expectations_doc();
+        let _ = match_expectation(&program_id, &data, &doc);
+        let _ = decode_instruction(&program_id, &data, &doc);
+        let _ = doc.find_instruction(&program_id);
+    }
+
+    #[test]
+    fn no_panic_signature_verify_any_bytes(
+        bytes in prop::collection::vec(any::<u8>(), 0..2048),
+        report in any_report(),
+    ) {
+        if let Ok(tx) = bincode::deserialize::<VersionedTransaction>(&bytes) {
+            let _ = verify_transaction(&tx);
+        }
+        let mut report = report;
+        let _ = verify_report(&mut report);
+    }
+
+    #[test]
+    fn patterns_config_roundtrip_no_panic(
+        report in any_report(),
+        config_json in prop::collection::vec(any::<u8>(), 0..512),
+    ) {
+        if let Ok(config) = serde_json::from_slice::<PatternConfig>(&config_json) {
+            let _ = detect_patterns_with_config(&report, &config);
+        }
+        let config = PatternConfig {
+            rules: [
+                (
+                    "approve_then_transfer".to_string(),
+                    PatternRuleOverride { enabled: Some(false), severity: Some("critical".to_string()) },
+                ),
+                (
+                    "nonsigner_transfer_authority".to_string(),
+                    PatternRuleOverride { enabled: Some(true), severity: Some("bogus".to_string()) },
+                ),
+                (
+                    "unknown_rule".to_string(),
+                    PatternRuleOverride { enabled: None, severity: Some("info".to_string()) },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let round_tripped: PatternConfig =
+            serde_json::from_value(serde_json::to_value(&config).expect("config serializes"))
+                .expect("config round-trips");
+        let _ = detect_patterns_with_config(&report, &round_tripped);
     }
 }

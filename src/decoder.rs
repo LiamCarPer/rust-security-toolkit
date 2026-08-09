@@ -88,14 +88,12 @@ fn decode_versioned_tx(tx: VersionedTransaction, schema: Option<&ProgramSchema>)
     let mut accounts: Vec<AccountInfo> = Vec::with_capacity(static_len);
     for (i, pubkey) in static_accounts.iter().enumerate() {
         let is_signer = i < num_required_signatures;
-        let is_writable = if is_signer {
-            i >= num_readonly_signed
-        } else {
-            let writable_signer_end = num_required_signatures.saturating_sub(num_readonly_signed);
-            let writable_unsigned_end =
-                writable_signer_end + (static_len - num_required_signatures - num_readonly_unsigned);
-            i >= writable_signer_end && i < writable_unsigned_end
-        };
+        // The runtime rule (solana-message is_writable_index): the first
+        // `req - ro_signed` signers are writable, then the non-signer window
+        // [req, len - ro_unsigned). A naive `i >= ro_signed` inversion here
+        // mislabels every account whenever a readonly signer is present.
+        let is_writable = i < num_required_signatures.saturating_sub(num_readonly_signed)
+            || (i >= num_required_signatures && i < static_len.saturating_sub(num_readonly_unsigned));
 
         let role = if i == 0 {
             Some("fee_payer".to_string())
@@ -427,7 +425,7 @@ fn estimate_high_cu_instructions(instructions: &[DecodedInstruction], cu_limit: 
 
 #[cfg(test)]
 mod tests {
-    use super::{estimate_cu_cost, estimate_high_cu_instructions, parse_compute_budget};
+    use super::{decode_raw_bytes, estimate_cu_cost, estimate_high_cu_instructions, parse_compute_budget};
     use crate::types::DecodedInstruction;
 
     fn cb(data: &[u8]) -> (u32, u64) {
@@ -593,5 +591,51 @@ mod tests {
         let instructions =
             vec![ix("System Program", Some("CreateAccount"), 0), ix("System Program", Some("Transfer"), 1)];
         assert_eq!(estimate_high_cu_instructions(&instructions, 200_000), vec![0]);
+    }
+
+    /// Regression: the writable-header derivation must match the runtime rule
+    /// (solana-message is_writable_index) when the message has a readonly
+    /// signer. The old code inverted signer writability and shifted the
+    /// non-signer window, mislabeling every account in such messages.
+    #[test]
+    fn writable_header_matches_runtime_with_readonly_signer() {
+        use solana_sdk::{
+            hash::Hash,
+            instruction::{AccountMeta, Instruction},
+            message::{VersionedMessage, legacy},
+            pubkey::Pubkey,
+            signature::Keypair,
+            signer::Signer,
+            transaction::VersionedTransaction,
+        };
+
+        let program_id = Pubkey::new_from_array([1u8; 32]);
+        let payer = Keypair::new();
+        let owner = Pubkey::new_unique();
+        let vault = Pubkey::new_unique();
+        let group = Pubkey::new_unique();
+        let ix = Instruction {
+            program_id,
+            accounts: vec![
+                AccountMeta::new_readonly(group, false),
+                AccountMeta::new_readonly(owner, true),
+                AccountMeta::new(vault, false),
+            ],
+            data: vec![0x24],
+        };
+        let message = VersionedMessage::Legacy(legacy::Message::new_with_blockhash(
+            &[ix],
+            Some(&payer.pubkey()),
+            &Hash::new_from_array([7u8; 32]),
+        ));
+        let tx = VersionedTransaction { signatures: vec![payer.sign_message(&message.serialize())], message };
+        let report = decode_raw_bytes(&bincode::serialize(&tx).unwrap(), None).expect("decode");
+
+        let by_key = |k: &str| report.accounts.iter().find(|a| a.pubkey == k).expect("account in message");
+        assert!(by_key(&payer.pubkey().to_string()).is_writable, "payer must be writable");
+        assert!(by_key(&vault.to_string()).is_writable, "vault (declared writable) must be writable");
+        assert!(!by_key(&owner.to_string()).is_writable, "readonly signer must not be writable");
+        assert!(!by_key(&group.to_string()).is_writable, "readonly account must not be writable");
+        assert!(!by_key(&program_id.to_string()).is_writable, "program id must not be writable");
     }
 }

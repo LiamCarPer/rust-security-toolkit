@@ -4,10 +4,10 @@ use solana_sdk::{message::VersionedMessage, transaction::VersionedTransaction};
 use crate::types::{
     ADDRESS_LOOKUP_TABLE_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, AccountInfo, AltResolution,
     COMPUTE_BUDGET_PROGRAM_ID, ComputeBudgetInfo, DecodedInstruction, Encoding, IdlJson, MappedAccount, PdaInfo,
-    ResolvedAccount, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, TransactionReport,
+    ProgramSchema, ResolvedAccount, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, TransactionReport,
 };
 
-use crate::{account_roles, anchor_decoder, encoding, instruction_decoder, internal_parser};
+use crate::{account_roles, anchor_decoder, encoding, expectations_decoder, instruction_decoder, internal_parser};
 
 pub use anchor_decoder::compute_anchor_discriminator;
 pub use encoding::detect_encoding;
@@ -15,11 +15,11 @@ pub use internal_parser::validate_decoding;
 
 /// Decode a transaction from pre-decoded raw bytes and produce a structured report.
 /// Use this when the caller has already handled encoding detection to avoid redundant work.
-pub fn decode_raw_bytes(raw_bytes: &[u8], idl: Option<&IdlJson>) -> Result<TransactionReport> {
+pub fn decode_raw_bytes(raw_bytes: &[u8], schema: Option<&ProgramSchema>) -> Result<TransactionReport> {
     let tx: VersionedTransaction =
         bincode::deserialize(raw_bytes).context("Failed to deserialize transaction via bincode (solana-sdk format)")?;
 
-    decode_versioned_tx(tx, idl)
+    decode_versioned_tx(tx, schema)
 }
 
 /// Decode a transaction from raw input bytes (text in Base58/Base64/Hex, or raw
@@ -29,13 +29,13 @@ pub fn decode_raw_bytes(raw_bytes: &[u8], idl: Option<&IdlJson>) -> Result<Trans
 /// Base58 or padding-less Base64 encoding. When the Hex interpretation fails to
 /// deserialize, the alternatives are retried before the primary error is
 /// returned.
-pub fn decode_input(input: &[u8], idl: Option<&IdlJson>) -> Result<(Vec<u8>, TransactionReport)> {
+pub fn decode_input(input: &[u8], schema: Option<&ProgramSchema>) -> Result<(Vec<u8>, TransactionReport)> {
     let bytes = encoding::decode_input_bytes(input)?;
     if bytes.is_empty() {
         anyhow::bail!("Transaction input is empty");
     }
 
-    match decode_raw_bytes(&bytes, idl) {
+    match decode_raw_bytes(&bytes, schema) {
         Ok(report) => Ok((bytes, report)),
         Err(primary_err) => {
             if let Ok(text) = std::str::from_utf8(input) {
@@ -43,7 +43,7 @@ pub fn decode_input(input: &[u8], idl: Option<&IdlJson>) -> Result<(Vec<u8>, Tra
                 if is_ambiguous_hex_text(trimmed) {
                     for candidate in [Encoding::Base58, Encoding::Base64] {
                         if let Ok(alt_bytes) = encoding::decode_from_encoding(trimmed, candidate)
-                            && let Ok(report) = decode_raw_bytes(&alt_bytes, idl)
+                            && let Ok(report) = decode_raw_bytes(&alt_bytes, schema)
                         {
                             return Ok((alt_bytes, report));
                         }
@@ -62,11 +62,11 @@ fn is_ambiguous_hex_text(trimmed: &str) -> bool {
 }
 
 /// Decode a transaction from any supported encoding and produce a structured report.
-pub fn decode_transaction(input: &str, idl: Option<&IdlJson>) -> Result<TransactionReport> {
-    decode_input(input.as_bytes(), idl).map(|(_, report)| report)
+pub fn decode_transaction(input: &str, schema: Option<&ProgramSchema>) -> Result<TransactionReport> {
+    decode_input(input.as_bytes(), schema).map(|(_, report)| report)
 }
 
-fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Result<TransactionReport> {
+fn decode_versioned_tx(tx: VersionedTransaction, schema: Option<&ProgramSchema>) -> Result<TransactionReport> {
     let message = &tx.message;
     let static_accounts = message.static_account_keys();
     let header = message.header();
@@ -198,7 +198,7 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
             .collect();
 
         let (instruction_name, decoded_data) =
-            instruction_decoder::decode_instruction_data(program_id.as_str(), &compiled_ix.data, idl);
+            instruction_decoder::decode_instruction_data(program_id.as_str(), &compiled_ix.data, schema);
 
         if program_id == COMPUTE_BUDGET_PROGRAM_ID {
             cb_positions.push(ix_idx);
@@ -257,9 +257,17 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
     // only fill accounts whose names are still unset.
     account_roles::annotate_known_program_roles(&mut instructions);
 
-    if let Some(idl) = idl {
-        annotate_instruction_account_names(&mut instructions, idl);
-        annotate_pda_accounts(&mut accounts, &instructions, idl);
+    if let Some(schema) = schema {
+        match schema {
+            ProgramSchema::Idl(idl) => {
+                annotate_instruction_account_names(&mut instructions, idl);
+                annotate_pda_accounts(&mut accounts, &instructions, idl);
+            }
+            ProgramSchema::Native(exp) => {
+                expectations_decoder::annotate_account_names(&mut instructions, exp);
+                expectations_decoder::annotate_pda_accounts(&mut accounts, &instructions, exp);
+            }
+        }
     }
 
     Ok(TransactionReport {
@@ -372,19 +380,19 @@ fn parse_compute_budget(data: &[u8]) -> Option<(u32, u64)> {
     Some((limit, price))
 }
 
-fn estimate_cu_cost(ix: &DecodedInstruction) -> u32 {
+pub(crate) fn estimate_cu_cost(ix: &DecodedInstruction) -> u32 {
     match ix.program_name.as_str() {
         "System Program" => match ix.instruction_name.as_deref() {
             Some("CreateAccount") | Some("CreateAccountWithSeed") => 15_000,
-            Some("Allocate") | Some("AllocateWithSeed") => 5_000,
-            Some("Assign") | Some("AssignWithSeed") => 2_000,
-            Some("Transfer") => 1_500,
-            _ => 3_000,
+            Some("Allocate") | Some("AllocateWithSeed") => 3_000,
+            Some("Assign") | Some("AssignWithSeed") => 1_000,
+            Some("Transfer") => 1_000,
+            _ => 2_000,
         },
         "Token Program" | "Token-2022 Program" => match ix.instruction_name.as_deref() {
-            Some("InitializeMint") | Some("InitializeMint2") => 15_000,
-            Some("InitializeAccount") | Some("InitializeAccount2") | Some("InitializeAccount3") => 15_000,
-            Some("InitializeMultisig") | Some("InitializeMultisig2") => 15_000,
+            Some("InitializeMint") | Some("InitializeMint2") => 5_000,
+            Some("InitializeAccount") | Some("InitializeAccount2") | Some("InitializeAccount3") => 5_000,
+            Some("InitializeMultisig") | Some("InitializeMultisig2") => 5_000,
             Some("Transfer") | Some("TransferChecked") => 3_000,
             Some("MintTo") | Some("MintToChecked") => 3_000,
             Some("Burn") | Some("BurnChecked") => 3_000,
@@ -419,10 +427,24 @@ fn estimate_high_cu_instructions(instructions: &[DecodedInstruction], cu_limit: 
 
 #[cfg(test)]
 mod tests {
-    use super::parse_compute_budget;
+    use super::{estimate_cu_cost, estimate_high_cu_instructions, parse_compute_budget};
+    use crate::types::DecodedInstruction;
 
     fn cb(data: &[u8]) -> (u32, u64) {
         parse_compute_budget(data).unwrap_or((0, 0))
+    }
+
+    fn ix(program_name: &str, instruction_name: Option<&str>, index: u8) -> DecodedInstruction {
+        DecodedInstruction {
+            index,
+            program_id: String::new(),
+            program_name: program_name.to_string(),
+            instruction_name: instruction_name.map(str::to_string),
+            accounts: vec![],
+            data: serde_json::Value::Null,
+            raw_data_hex: String::new(),
+            token_amount: None,
+        }
     }
 
     #[test]
@@ -473,5 +495,103 @@ mod tests {
         let (limit, price) = parse_compute_budget(&data).unwrap();
         assert_eq!(limit, 0);
         assert_eq!(price, 10_000);
+    }
+
+    #[test]
+    fn system_transfer_estimated_at_one_k() {
+        assert_eq!(estimate_cu_cost(&ix("System Program", Some("Transfer"), 0)), 1_000);
+    }
+
+    #[test]
+    fn system_create_account_estimated_at_fifteen_k() {
+        assert_eq!(estimate_cu_cost(&ix("System Program", Some("CreateAccount"), 0)), 15_000);
+        assert_eq!(estimate_cu_cost(&ix("System Program", Some("CreateAccountWithSeed"), 0)), 15_000);
+    }
+
+    #[test]
+    fn system_allocate_estimated_at_three_k() {
+        assert_eq!(estimate_cu_cost(&ix("System Program", Some("Allocate"), 0)), 3_000);
+        assert_eq!(estimate_cu_cost(&ix("System Program", Some("AllocateWithSeed"), 0)), 3_000);
+    }
+
+    #[test]
+    fn system_assign_estimated_at_one_k() {
+        assert_eq!(estimate_cu_cost(&ix("System Program", Some("Assign"), 0)), 1_000);
+        assert_eq!(estimate_cu_cost(&ix("System Program", Some("AssignWithSeed"), 0)), 1_000);
+    }
+
+    #[test]
+    fn system_unknown_instruction_estimated_at_two_k() {
+        assert_eq!(estimate_cu_cost(&ix("System Program", Some("NonceInitialize"), 0)), 2_000);
+    }
+
+    #[test]
+    fn token_operations_estimated_at_three_k() {
+        for program in ["Token Program", "Token-2022 Program"] {
+            for name in [
+                "Transfer",
+                "TransferChecked",
+                "MintTo",
+                "MintToChecked",
+                "Burn",
+                "BurnChecked",
+                "CloseAccount",
+                "Approve",
+                "ApproveChecked",
+                "SetAuthority",
+                "FreezeAccount",
+                "ThawAccount",
+            ] {
+                assert_eq!(estimate_cu_cost(&ix(program, Some(name), 0)), 3_000, "{program} {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn token_initialize_estimated_at_five_k() {
+        for program in ["Token Program", "Token-2022 Program"] {
+            for name in [
+                "InitializeMint",
+                "InitializeMint2",
+                "InitializeAccount",
+                "InitializeAccount2",
+                "InitializeAccount3",
+                "InitializeMultisig",
+                "InitializeMultisig2",
+            ] {
+                assert_eq!(estimate_cu_cost(&ix(program, Some(name), 0)), 5_000, "{program} {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn token_confidential_transfer_estimated_at_twenty_five_k() {
+        for program in ["Token Program", "Token-2022 Program"] {
+            assert_eq!(estimate_cu_cost(&ix(program, Some("ConfidentialTransfer"), 0)), 25_000);
+        }
+    }
+
+    #[test]
+    fn token_transfer_fee_config_estimated_at_fifteen_k() {
+        assert_eq!(estimate_cu_cost(&ix("Token-2022 Program", Some("InitializeTransferFeeConfig"), 0)), 15_000);
+    }
+
+    #[test]
+    fn compute_budget_estimated_at_zero() {
+        assert_eq!(estimate_cu_cost(&ix("Compute Budget", Some("SetComputeUnitLimit"), 0)), 0);
+    }
+
+    #[test]
+    fn unknown_program_estimated_at_five_k() {
+        assert_eq!(estimate_cu_cost(&ix("Some Other Program", Some("Whatever"), 0)), 5_000);
+        assert_eq!(estimate_cu_cost(&ix("Associated Token Program", Some("Unknown"), 0)), 5_000);
+        assert_eq!(estimate_cu_cost(&ix("Address Lookup Table", Some("Extend"), 0)), 5_000);
+    }
+
+    #[test]
+    fn high_cu_flags_create_account_but_not_system_transfer() {
+        let instructions =
+            vec![ix("System Program", Some("CreateAccount"), 0), ix("System Program", Some("Transfer"), 1)];
+        assert_eq!(estimate_high_cu_instructions(&instructions, 200_000), vec![0]);
     }
 }

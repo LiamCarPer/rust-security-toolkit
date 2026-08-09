@@ -3,15 +3,16 @@ use solana_sdk::pubkey::Pubkey;
 use crate::types::TOKEN_2022_PROGRAM_ID;
 
 use crate::anchor_decoder::{compute_anchor_discriminator, decode_anchor_args};
+use crate::expectations_decoder;
 use crate::types::{
-    ASSOCIATED_TOKEN_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, IdlJson, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, ProgramSchema, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
 };
 
 /// Decode instruction data for known programs and IDL-based matching.
 pub fn decode_instruction_data(
     program_id: &str,
     data: &[u8],
-    idl: Option<&IdlJson>,
+    schema: Option<&ProgramSchema>,
 ) -> (Option<String>, serde_json::Value) {
     if data.is_empty() {
         return (None, serde_json::Value::Null);
@@ -23,15 +24,22 @@ pub fn decode_instruction_data(
         ASSOCIATED_TOKEN_PROGRAM_ID => decode_associated_token_instruction(data),
         COMPUTE_BUDGET_PROGRAM_ID => decode_compute_budget_instruction(data),
         _ => {
-            if let Some(idl) = idl
-                && data.len() >= 8
-            {
-                let discriminator = &data[0..8];
-                for ix in &idl.instructions {
-                    let expected = compute_anchor_discriminator(&ix.name);
-                    if discriminator == &expected[..] {
-                        let args = decode_anchor_args(&data[8..], &ix.args);
-                        return (Some(ix.name.clone()), args);
+            if let Some(schema) = schema {
+                match schema {
+                    ProgramSchema::Idl(idl) => {
+                        if data.len() >= 8 {
+                            let discriminator = &data[0..8];
+                            for ix in &idl.instructions {
+                                let expected = compute_anchor_discriminator(&ix.name);
+                                if discriminator == &expected[..] {
+                                    let args = decode_anchor_args(&data[8..], &ix.args);
+                                    return (Some(ix.name.clone()), args);
+                                }
+                            }
+                        }
+                    }
+                    ProgramSchema::Native(exp) => {
+                        return expectations_decoder::decode_instruction(program_id, data, exp);
                     }
                 }
             }
@@ -769,5 +777,51 @@ mod tests {
         let (name, decoded) = decode_compute_budget(&data);
         assert_eq!(name.as_deref(), Some("SetLoadedAccountsDataSizeLimit"));
         assert_eq!(decoded["bytes"].as_u64(), Some(64_512));
+    }
+
+    fn native_schema() -> crate::types::ProgramSchema {
+        crate::types::ProgramSchema::Native(
+            serde_json::from_str(
+                r#"{
+                  "program_name": "Mango",
+                  "program_id": "MangoProgram",
+                  "source": "native",
+                  "instructions": [
+                    {"name": "DoThing", "discriminator_hex": "42", "handler": "do_thing", "accounts": []}
+                  ]
+                }"#,
+            )
+            .expect("parse native expectations"),
+        )
+    }
+
+    #[test]
+    fn native_schema_names_matching_unknown_program() {
+        let schema = native_schema();
+        let (name, _) = decode_instruction_data("MangoProgram", &[0x42, 0x01], Some(&schema));
+        assert_eq!(name.as_deref(), Some("DoThing"));
+    }
+
+    #[test]
+    fn native_schema_unknown_program_id_gated() {
+        let schema = native_schema();
+        let (name, _) = decode_instruction_data("OtherProgram", &[0x42, 0x01], Some(&schema));
+        assert!(name.is_none());
+    }
+
+    #[test]
+    fn native_schema_no_match_keeps_hex_fallback() {
+        let schema = native_schema();
+        let (name, data) = decode_instruction_data("MangoProgram", &[0x99], Some(&schema));
+        assert!(name.is_none());
+        assert_eq!(data, serde_json::Value::String("99".to_string()));
+    }
+
+    #[test]
+    fn known_program_decoding_ignores_native_schema() {
+        let schema = native_schema();
+        let (name, _) =
+            decode_instruction_data(SYSTEM_PROGRAM_ID, &[2, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0], Some(&schema));
+        assert_eq!(name.as_deref(), Some("Transfer"));
     }
 }

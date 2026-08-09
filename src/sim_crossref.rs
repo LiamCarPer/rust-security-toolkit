@@ -175,6 +175,35 @@ pub fn cross_reference(report: &mut crate::types::TransactionReport) -> Vec<crat
         sim.instruction_cu = parse_instruction_cu(&sim.logs);
     }
 
+    if let Some(sim) = report.simulation.as_ref() {
+        for cu in &sim.instruction_cu {
+            let Some(ix) = report.instructions.iter().find(|d| d.index == cu.instruction_index) else { continue };
+            let estimate = crate::decoder::estimate_cu_cost(ix);
+            if estimate == 0 {
+                continue;
+            }
+            let actual = cu.units_consumed;
+            let estimate_exceeds = (estimate as f64) > actual as f64 * 1.5;
+            let actual_exceeds = actual > estimate as u64 * 3;
+            if estimate_exceeds || actual_exceeds {
+                let name = ix.instruction_name.as_deref().unwrap_or(ix.program_name.as_str());
+                flags.push(RiskFlag {
+                    severity: RiskSeverity::Info,
+                    category: RiskCategory::SimulationMismatch,
+                    instruction_index: Some(cu.instruction_index),
+                    message: format!(
+                        "Instruction #{} ({name}): simulated {actual} CU vs estimated {estimate} CU — estimate table may need recalibration",
+                        cu.instruction_index
+                    ),
+                    details: "The simulated compute unit consumption deviates from the static estimate by \
+                              more than 50% in one direction or more than 3x in the other; the estimate \
+                              table may need recalibration."
+                        .to_string(),
+                });
+            }
+        }
+    }
+
     flags
 }
 
@@ -463,12 +492,92 @@ mod tests {
         ];
         let mut report = base_report(2, None, Some(simulation(true, logs, 300, None)));
         let flags = cross_reference(&mut report);
-        assert!(flags.is_empty(), "unexpected flags: {:?}", flags);
+        assert!(
+            flags.iter().all(|f| f.severity == RiskSeverity::Info && f.message.contains("recalibration")),
+            "unexpected flags: {:?}",
+            flags
+        );
         let cu = report.simulation.as_ref().expect("simulation present").instruction_cu.clone();
         assert_eq!(cu.len(), 2);
         assert_eq!(cu[0].instruction_index, 0);
         assert_eq!(cu[0].units_consumed, 100);
         assert_eq!(cu[1].instruction_index, 1);
         assert_eq!(cu[1].units_consumed, 200);
+    }
+
+    fn instruction(program_name: &str, name: &str, index: u8) -> DecodedInstruction {
+        DecodedInstruction {
+            index,
+            program_id: String::new(),
+            program_name: program_name.to_string(),
+            instruction_name: Some(name.to_string()),
+            accounts: vec![],
+            data: serde_json::Value::Null,
+            raw_data_hex: String::new(),
+            token_amount: None,
+        }
+    }
+
+    fn consumed_logs(consumed: u64) -> Vec<String> {
+        vec![
+            "Program 11111111111111111111111111111111 invoke [1]".to_string(),
+            "Program 11111111111111111111111111111111 success".to_string(),
+            format!("Program 11111111111111111111111111111111 consumed {consumed} of 200000 compute units"),
+        ]
+    }
+
+    #[test]
+    fn estimate_vs_actual_within_bounds_no_flag() {
+        let mut report = base_report(1, None, Some(simulation(true, consumed_logs(12_000), 12_000, None)));
+        report.instructions = vec![instruction("System Program", "CreateAccount", 0)];
+        let flags = cross_reference(&mut report);
+        assert!(flags.is_empty(), "unexpected flags: {:?}", flags);
+    }
+
+    #[test]
+    fn estimate_underestimates_actual_flags_info() {
+        let mut report = base_report(1, None, Some(simulation(true, consumed_logs(15_000), 15_000, None)));
+        report.instructions = vec![instruction("Token Program", "Transfer", 0)];
+        let flags = cross_reference(&mut report);
+        let cal = flags.iter().find(|f| f.message.contains("recalibration")).expect("calibration flag");
+        assert_eq!(cal.severity, RiskSeverity::Info);
+        assert_eq!(cal.category, RiskCategory::SimulationMismatch);
+        assert_eq!(cal.instruction_index, Some(0));
+        assert!(cal.message.contains("Instruction #0 (Transfer): simulated 15000 CU vs estimated 3000 CU"));
+    }
+
+    #[test]
+    fn estimate_overestimates_actual_flags_info() {
+        let mut report = base_report(1, None, Some(simulation(true, consumed_logs(2_000), 2_000, None)));
+        report.instructions = vec![instruction("System Program", "CreateAccount", 0)];
+        let flags = cross_reference(&mut report);
+        let cal = flags.iter().find(|f| f.message.contains("recalibration")).expect("calibration flag");
+        assert_eq!(cal.severity, RiskSeverity::Info);
+        assert_eq!(cal.instruction_index, Some(0));
+        assert!(cal.message.contains("simulated 2000 CU vs estimated 15000 CU"));
+    }
+
+    #[test]
+    fn compute_budget_instructions_never_flag() {
+        let mut report = base_report(1, None, Some(simulation(true, consumed_logs(1_000), 1_000, None)));
+        report.instructions = vec![instruction("Compute Budget", "SetComputeUnitLimit", 0)];
+        let flags = cross_reference(&mut report);
+        assert!(flags.is_empty(), "unexpected flags: {:?}", flags);
+    }
+
+    #[test]
+    fn calibration_flags_append_after_existing() {
+        let mut report = base_report(
+            1,
+            Some(budget(150_000, 0, vec![0])),
+            Some(simulation(true, consumed_logs(170_000), 175_000, None)),
+        );
+        report.instructions = vec![instruction("System Program", "Transfer", 0)];
+        let flags = cross_reference(&mut report);
+        let cu = flags.iter().find(|f| f.message.contains("declared limit")).expect("cu-limit flag");
+        assert_eq!(cu.severity, RiskSeverity::Warning);
+        let cal = flags.iter().find(|f| f.message.contains("recalibration")).expect("calibration flag");
+        assert_eq!(cal.severity, RiskSeverity::Info);
+        assert_eq!(flags.last().map(|f| f.message.contains("recalibration")), Some(true));
     }
 }

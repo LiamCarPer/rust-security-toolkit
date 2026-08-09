@@ -171,6 +171,76 @@ pub async fn simulate_transaction(rpc_url: &str, raw_tx_base64: &str) -> Result<
     })
 }
 
+#[derive(Serialize)]
+struct RpcGetTransactionRequest {
+    jsonrpc: String,
+    id: u32,
+    method: String,
+    params: (String, RpcGetTransactionConfig),
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RpcGetTransactionConfig {
+    encoding: String,
+    commitment: String,
+    max_supported_transaction_version: u8,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcGetTransactionResponse {
+    result: Option<serde_json::Value>,
+    error: Option<RpcError>,
+}
+
+pub async fn fetch_transaction_by_signature(rpc_url: &str, signature: &str) -> Result<Vec<u8>> {
+    let client = reqwest::Client::new();
+
+    let request = RpcGetTransactionRequest {
+        jsonrpc: "2.0".to_string(),
+        id: 1,
+        method: "getTransaction".to_string(),
+        params: (
+            signature.to_string(),
+            RpcGetTransactionConfig {
+                encoding: "base64".to_string(),
+                commitment: "confirmed".to_string(),
+                max_supported_transaction_version: 0,
+            },
+        ),
+    };
+
+    let response = client
+        .post(rpc_url)
+        .json(&request)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("Failed to send getTransaction RPC request")?;
+
+    let body: RpcGetTransactionResponse =
+        response.json().await.context("Failed to parse getTransaction RPC response")?;
+
+    if let Some(err) = body.error {
+        anyhow::bail!("RPC error: {}", err.message);
+    }
+
+    let result = body.result.ok_or_else(|| anyhow::anyhow!("Transaction {} not found", signature))?;
+
+    let parts =
+        result.as_array().ok_or_else(|| anyhow::anyhow!("malformed getTransaction result: expected an array"))?;
+
+    let encoded = parts
+        .first()
+        .and_then(|p| p.as_str())
+        .ok_or_else(|| anyhow::anyhow!("malformed getTransaction result: missing base64 transaction"))?;
+
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .with_context(|| format!("transaction data for signature {} is not valid base64", signature))
+}
+
 // ── Address Lookup Table Resolution ─────────────────────────────────────────
 
 #[derive(Serialize)]

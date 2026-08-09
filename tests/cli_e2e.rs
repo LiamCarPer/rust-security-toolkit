@@ -1,5 +1,14 @@
 #[cfg(test)]
 mod cli_e2e_tests {
+    use solana_sdk::{
+        hash::Hash,
+        instruction::{AccountMeta, Instruction},
+        message::{VersionedMessage, legacy},
+        pubkey::Pubkey,
+        signature::Keypair,
+        signer::Signer,
+        transaction::VersionedTransaction,
+    };
     use std::io::Write;
     use std::process::Command;
     use std::process::Stdio;
@@ -235,5 +244,128 @@ mod cli_e2e_tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let report: serde_json::Value = serde_json::from_str(&stdout).expect("rts --json output is not valid JSON");
         assert_eq!(report["status"], "DECODED SUCCESSFULLY");
+    }
+
+    // ── Native expectations CLI tests ────────────────────────────────────────
+
+    /// Deterministic program id matching `tests/fixtures/native_expectations.json`.
+    fn expectations_program_id() -> Pubkey {
+        Pubkey::new_from_array([1u8; 32])
+    }
+
+    /// Serialize a single-instruction legacy transaction as hex.
+    fn build_tx_hex(program_id: Pubkey, metas: Vec<AccountMeta>, data: Vec<u8>) -> String {
+        let payer = Keypair::new();
+        let recent_blockhash = Hash::new_from_array([7u8; 32]);
+        let ix = Instruction { program_id, accounts: metas, data };
+        let message = VersionedMessage::Legacy(legacy::Message::new_with_blockhash(
+            &[ix],
+            Some(&payer.pubkey()),
+            &recent_blockhash,
+        ));
+        let tx = VersionedTransaction { signatures: vec![payer.sign_message(&message.serialize())], message };
+        hex::encode(bincode::serialize(&tx).unwrap())
+    }
+
+    /// WithdrawMsrm metas: mango_group readonly, owner (signer per
+    /// `owner_is_signer`), vault writable.
+    ///
+    /// NOTE: `owner` is a *writable* signer (AccountMeta::new) although the
+    /// fixture declares it readonly: the committed decoder misderives header
+    /// writability for readonly signers (see report), and a writable owner
+    /// keeps the header math correct (num_readonly_signed == 0).
+    fn msrm_metas(owner_is_signer: bool) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new_readonly(Pubkey::new_unique(), false),
+            AccountMeta::new(Pubkey::new_unique(), owner_is_signer),
+            AccountMeta::new(Pubkey::new_unique(), false),
+        ]
+    }
+
+    fn risk_categories(json: &serde_json::Value) -> Vec<String> {
+        json["risk_flags"]
+            .as_array()
+            .map(|flags| {
+                flags.iter().filter_map(|f| f["category"].as_str().map(str::to_string)).collect::<Vec<String>>()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Missing signer (owner not a signer) is a Critical flag: exit code 2 and
+    /// the JSON report carries the MissingSigner entry.
+    #[test]
+    fn test_cli_expectations_flags_missing_signer() {
+        let tx_hex = build_tx_hex(expectations_program_id(), msrm_metas(false), vec![0x24]);
+
+        let output = rts_binary()
+            .arg("--expectations")
+            .arg("tests/fixtures/native_expectations.json")
+            .arg("--json")
+            .arg(&tx_hex)
+            .output()
+            .expect("Failed to execute rts binary");
+
+        assert_eq!(output.status.code(), Some(2), "Critical MissingSigner must exit 2");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let report: serde_json::Value = serde_json::from_str(&stdout).expect("rts --json output is not valid JSON");
+        let categories = risk_categories(&report);
+        assert!(
+            categories.iter().any(|c| c == "missing_signer"),
+            "risk_flags must contain missing_signer, got: {:?}",
+            categories
+        );
+    }
+
+    /// A correct-signer WithdrawMsrm tx has no Critical flags; the missing
+    /// compute budget warning (MissingComputeUnitLimit) drives the exit code
+    /// to 1, and no MissingSigner/InsecureWritable flags are emitted.
+    #[test]
+    fn test_cli_expectations_clean_tx_exit_one() {
+        let tx_hex = build_tx_hex(expectations_program_id(), msrm_metas(true), vec![0x24]);
+
+        let output = rts_binary()
+            .arg("--expectations")
+            .arg("tests/fixtures/native_expectations.json")
+            .arg("--json")
+            .arg(&tx_hex)
+            .output()
+            .expect("Failed to execute rts binary");
+
+        // No Critical flags, but the missing compute budget is a Warning:
+        // severity exit code is 1 (not 0).
+        assert_eq!(output.status.code(), Some(1), "clean tx must exit 1 (MissingComputeUnitLimit warning)");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let report: serde_json::Value = serde_json::from_str(&stdout).expect("rts --json output is not valid JSON");
+        let categories = risk_categories(&report);
+        assert!(
+            !categories.iter().any(|c| c == "missing_signer"),
+            "no MissingSigner on a correct-signer tx, got: {:?}",
+            categories
+        );
+        assert!(
+            !categories.iter().any(|c| c == "insecure_writable"),
+            "no InsecureWritable on a clean tx, got: {:?}",
+            categories
+        );
+    }
+
+    /// `--idl` and `--expectations` conflict at clap parse time: non-zero exit
+    /// and the clap-4 conflict wording on stderr.
+    #[test]
+    fn test_cli_idl_expectations_conflict() {
+        let tx_hex = build_tx_hex(expectations_program_id(), msrm_metas(true), vec![0x24]);
+
+        let output = rts_binary()
+            .arg("--idl")
+            .arg("tests/fixtures/system_transfer.hex")
+            .arg("--expectations")
+            .arg("tests/fixtures/native_expectations.json")
+            .arg(&tx_hex)
+            .output()
+            .expect("Failed to execute rts binary");
+
+        assert!(!output.status.success(), "clap must reject --idl + --expectations together");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("cannot be used with"), "clap conflict wording missing, stderr: {}", stderr);
     }
 }

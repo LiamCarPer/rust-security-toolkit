@@ -1,0 +1,34 @@
+{
+  "program_name": "program",
+  "program_id": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+  "source": "native",
+  "instructions": [
+    {
+      "name": "WithdrawMsrm",
+      "discriminator_hex": "24",
+      "handler": "withdraw_msrm",
+      "accounts": [
+        {"name": "mango_group_ai", "index": 0, "is_signer_expected": false, "is_writable_expected": false, "pda": null},
+        {"name": "owner_ai", "index": 1, "is_signer_expected": true, "is_writable_expected": false, "pda": null},
+        {"name": "vault_ai", "index": 2, "is_signer_expected": false, "is_writable_expected": true, "pda": null}
+      ]
+    },
+    {
+      "name": "withdraw_escrow",
+      "discriminator_hex": "25",
+      "handler": "withdraw_escrow",
+      "accounts": [
+        {"name": "escrow", "index": 0, "is_signer_expected": false, "is_writable_expected": true, "pda": {"seeds": ["escrow"], "dynamic_seed_count": 0}},
+        {"name": "authority", "index": 1, "is_signer_expected": true, "is_writable_expected": false, "pda": null}
+      ]
+    },
+    {
+      "name": "withdraw_dynamic",
+      "discriminator_hex": "26",
+      "handler": "withdraw_dynamic",
+      "accounts": [
+        {"name": "escrow", "index": 0, "is_signer_expected": false, "is_writable_expected": false, "pda": {"seeds": ["escrow"], "dynamic_seed_count": 1}}
+      ]
+    }
+  ]
+}

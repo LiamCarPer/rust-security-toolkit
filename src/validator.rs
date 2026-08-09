@@ -1,16 +1,27 @@
 use crate::types::{
-    IdlJson, IdlPda, KNOWN_PROGRAM_IDS, KNOWN_SYSVAR_IDS, RiskCategory, RiskFlag, RiskSeverity, TransactionReport,
+    ExpectationsDoc, IdlJson, IdlPda, KNOWN_PROGRAM_IDS, KNOWN_SYSVAR_IDS, ProgramSchema, RiskCategory, RiskFlag,
+    RiskSeverity, TransactionReport,
 };
 
 /// Run all structural risk validations against a decoded transaction report.
-pub fn validate(report: &mut TransactionReport, idl: Option<&IdlJson>) {
+pub fn validate(report: &mut TransactionReport, schema: Option<&ProgramSchema>) {
     let mut flags: Vec<RiskFlag> = Vec::new();
 
-    if let Some(idl) = idl {
-        validate_pda_seeds_tier1(idl, &mut flags);
-        validate_pda_seeds_tier2(report, idl, &mut flags);
-        validate_missing_signers(report, idl, &mut flags);
-        validate_idl_account_counts(report, idl, &mut flags);
+    match schema {
+        Some(ProgramSchema::Idl(idl)) => {
+            validate_pda_seeds_tier1(idl, &mut flags);
+            validate_pda_seeds_tier2(report, idl, &mut flags);
+            validate_missing_signers(report, idl, &mut flags);
+            validate_idl_account_counts(report, idl, &mut flags);
+        }
+        Some(ProgramSchema::Native(exp)) => {
+            validate_native_pda_seeds_tier1(exp, &mut flags);
+            validate_native_pda_seeds_tier2(report, exp, &mut flags);
+            validate_native_missing_signers(report, exp, &mut flags);
+            validate_native_writable_roles(report, exp, &mut flags);
+            validate_native_account_counts(report, exp, &mut flags);
+        }
+        None => {}
     }
 
     validate_writable_entities(report, &mut flags);
@@ -307,6 +318,234 @@ fn validate_idl_account_counts(report: &TransactionReport, idl: &IdlJson, flags:
                 details: "The compiled instruction account list is longer than the IDL's declared \
                           accounts (accounting for the appended program id). Account-role and PDA \
                           checks for this instruction may map to the wrong accounts."
+                    .to_string(),
+            });
+        }
+    }
+}
+
+// ── Native expectations: PDA Well-Formedness (tier 1) ─────────────────────────
+
+fn validate_native_pda_seeds_tier1(exp: &ExpectationsDoc, flags: &mut Vec<RiskFlag>) {
+    for ix in &exp.instructions {
+        for account in ix.accounts.iter().filter(|a| a.pda.is_some()) {
+            let pda = account.pda.as_ref().unwrap();
+            if pda.seeds.is_empty() && pda.dynamic_seed_count == 0 {
+                flags.push(RiskFlag {
+                    severity: RiskSeverity::Warning,
+                    category: RiskCategory::PdaWellFormedness,
+                    instruction_index: None,
+                    message: format!(
+                        "Instruction '{}': account '{}' declares PDA with empty seeds array",
+                        ix.name, account.name
+                    ),
+                    details: "Empty seeds arrays should be verified against program source code.".to_string(),
+                });
+            }
+        }
+    }
+}
+
+// ── Native expectations: Runtime PDA Seed Verification (tier 2) ───────────────
+
+fn validate_native_pda_seeds_tier2(report: &mut TransactionReport, exp: &ExpectationsDoc, flags: &mut Vec<RiskFlag>) {
+    use solana_sdk::pubkey::Pubkey;
+    use std::str::FromStr;
+
+    for decoded_ix in &report.instructions {
+        let ix_name = match &decoded_ix.instruction_name {
+            Some(name) => name,
+            None => continue,
+        };
+        let exp_ix = match exp.find_instruction(ix_name) {
+            Some(ix) => ix,
+            None => continue,
+        };
+        let program_id = match Pubkey::from_str(&decoded_ix.program_id) {
+            Ok(pk) => pk,
+            Err(_) => continue,
+        };
+
+        for exp_account in &exp_ix.accounts {
+            let pda = match &exp_account.pda {
+                Some(pda) => pda,
+                None => continue,
+            };
+            let mapped = match decoded_ix.accounts.get(exp_account.index) {
+                Some(a) => a,
+                None => continue,
+            };
+            let actual_pubkey = match Pubkey::from_str(&mapped.pubkey) {
+                Ok(pk) => pk,
+                Err(_) => continue,
+            };
+
+            if pda.dynamic_seed_count > 0 {
+                flags.push(RiskFlag {
+                    severity: RiskSeverity::Warning,
+                    category: RiskCategory::PdaSeedMismatch,
+                    instruction_index: Some(decoded_ix.index),
+                    message: format!(
+                        "Instruction '{}': Cannot fully verify PDA for account '{}' — {} seed(s) depend on runtime values",
+                        ix_name, exp_account.name, pda.dynamic_seed_count
+                    ),
+                    details: "Only literal seeds are exported by sat's expectations; argument/key-derived \
+                              seeds can only be verified on-chain at execution time."
+                        .to_string(),
+                });
+            }
+
+            if pda.seeds.is_empty() {
+                continue;
+            }
+
+            let seed_bytes: Vec<Vec<u8>> = pda.seeds.iter().map(|s| s.as_bytes().to_vec()).collect();
+            let seed_slices: Vec<&[u8]> = seed_bytes.iter().map(|v| v.as_slice()).collect();
+            let (expected_pubkey, bump) = Pubkey::find_program_address(&seed_slices, &program_id);
+
+            if let Some(account) = report.accounts.get_mut(mapped.account_index as usize) {
+                account.pda_info = Some(crate::types::PdaInfo {
+                    seeds_declared: pda.seeds.clone(),
+                    bump: Some(bump),
+                    expected_address: Some(expected_pubkey.to_string()),
+                });
+            }
+            if expected_pubkey != actual_pubkey {
+                let note = if pda.seeds.iter().any(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())) {
+                    " (note: numeric literal seeds are exported by sat as strings; derivation assumes UTF-8 bytes)"
+                } else {
+                    ""
+                };
+                flags.push(RiskFlag {
+                    severity: RiskSeverity::Critical,
+                    category: RiskCategory::PdaSeedMismatch,
+                    instruction_index: Some(decoded_ix.index),
+                    message: format!(
+                        "Instruction '{}': PDA Seed Mismatch for account '{}' (Account #{})",
+                        ix_name, exp_account.name, mapped.account_index
+                    ),
+                    details: format!(
+                        "Expected PDA {} derived from seeds [{}], but transaction contains {}.{}",
+                        expected_pubkey,
+                        pda.seeds.join(", "),
+                        actual_pubkey,
+                        note
+                    ),
+                });
+            }
+        }
+    }
+}
+
+// ── Native expectations: Missing Signer ──────────────────────────────────────
+
+fn validate_native_missing_signers(report: &TransactionReport, exp: &ExpectationsDoc, flags: &mut Vec<RiskFlag>) {
+    for decoded_ix in &report.instructions {
+        let ix_name = match &decoded_ix.instruction_name {
+            Some(name) => name,
+            None => continue,
+        };
+        let exp_ix = match exp.find_instruction(ix_name) {
+            Some(ix) => ix,
+            None => continue,
+        };
+        for exp_account in &exp_ix.accounts {
+            if !exp_account.is_signer_expected {
+                continue;
+            }
+            let mapped = match decoded_ix.accounts.get(exp_account.index) {
+                Some(a) => a,
+                None => continue,
+            };
+            if !mapped.is_signer {
+                flags.push(RiskFlag {
+                    severity: RiskSeverity::Critical,
+                    category: RiskCategory::MissingSigner,
+                    instruction_index: Some(decoded_ix.index),
+                    message: format!(
+                        "Instruction '{}': Missing Signer — account '{}' (Account #{}) is declared \
+                         as requiring a signature in the program expectations, but appears as a \
+                         non-signer in the transaction message header.",
+                        ix_name, exp_account.name, mapped.account_index
+                    ),
+                    details: format!(
+                        "SAT-native expectations declare account '{}' as signer-expected, but tx header \
+                         shows it as non-signer. This may indicate a signer privilege escalation or a \
+                         misconfigured transaction.",
+                        exp_account.name
+                    ),
+                });
+            }
+        }
+    }
+}
+
+// ── Native expectations: Writable Role Mismatch ──────────────────────────────
+
+fn validate_native_writable_roles(report: &TransactionReport, exp: &ExpectationsDoc, flags: &mut Vec<RiskFlag>) {
+    for decoded_ix in &report.instructions {
+        let ix_name = match &decoded_ix.instruction_name {
+            Some(name) => name,
+            None => continue,
+        };
+        let exp_ix = match exp.find_instruction(ix_name) {
+            Some(ix) => ix,
+            None => continue,
+        };
+        for exp_account in &exp_ix.accounts {
+            if !exp_account.is_writable_expected {
+                continue;
+            }
+            let mapped = match decoded_ix.accounts.get(exp_account.index) {
+                Some(a) => a,
+                None => continue,
+            };
+            if !mapped.is_writable {
+                flags.push(RiskFlag {
+                    severity: RiskSeverity::Warning,
+                    category: RiskCategory::WritableMismatch,
+                    instruction_index: Some(decoded_ix.index),
+                    message: format!(
+                        "Instruction '{}': account '{}' (Account #{}) is expected to be writable per \
+                         program expectations but is read-only in the transaction.",
+                        ix_name, exp_account.name, mapped.account_index
+                    ),
+                    details: "The program source marks this account as written; a read-only account in \
+                              the message would fail at runtime or indicate a misconfigured transaction."
+                        .to_string(),
+                });
+            }
+        }
+    }
+}
+
+// ── Native expectations: Account Count Consistency ───────────────────────────
+
+fn validate_native_account_counts(report: &TransactionReport, exp: &ExpectationsDoc, flags: &mut Vec<RiskFlag>) {
+    for decoded_ix in &report.instructions {
+        let ix_name = match &decoded_ix.instruction_name {
+            Some(name) => name,
+            None => continue,
+        };
+        let exp_ix = match exp.find_instruction(ix_name) {
+            Some(ix) => ix,
+            None => continue,
+        };
+        let exp_count = exp_ix.accounts.len();
+        let compiled_count = decoded_ix.accounts.len();
+        if compiled_count > exp_count {
+            flags.push(RiskFlag {
+                severity: RiskSeverity::Warning,
+                category: RiskCategory::NativeAccountMismatch,
+                instruction_index: Some(decoded_ix.index),
+                message: format!(
+                    "Instruction '{}': transaction lists {} accounts but the expectations declare {} — \
+                     positional account mapping may be misaligned",
+                    ix_name, compiled_count, exp_count
+                ),
+                details: "The compiled instruction account list is longer than the expectations document's \
+                          declared accounts. Account-role and PDA checks for this instruction may map to \
+                          the wrong accounts."
                     .to_string(),
             });
         }
@@ -651,5 +890,255 @@ mod tests {
 
         validate(&mut report, None);
         assert!(report.risk_flags.is_empty());
+    }
+
+    // ── Native expectations checks ────────────────────────────────────────────
+
+    const NATIVE_EXPECTATIONS: &str = r#"{
+      "program_name": "program",
+      "program_id": "MangoPid1111111111111111111111111111111111",
+      "source": "native",
+      "instructions": [
+        {
+          "name": "WithdrawMsrm",
+          "discriminator_hex": "24",
+          "handler": "withdraw_msrm",
+          "accounts": [
+            {"name": "mango_group_ai", "index": 0, "is_signer_expected": false, "is_writable_expected": false, "pda": null},
+            {"name": "owner_ai", "index": 2, "is_signer_expected": true, "is_writable_expected": false, "pda": null},
+            {"name": "vault_ai", "index": 3, "is_signer_expected": false, "is_writable_expected": true, "pda": null}
+          ]
+        },
+        {
+          "name": "withdraw_escrow",
+          "discriminator_hex": "25",
+          "handler": "withdraw_escrow",
+          "accounts": [
+            {"name": "escrow", "index": 0, "is_signer_expected": false, "is_writable_expected": true,
+             "pda": {"seeds": ["escrow"], "dynamic_seed_count": 0}},
+            {"name": "authority", "index": 1, "is_signer_expected": true, "is_writable_expected": false, "pda": null}
+          ]
+        },
+        {
+          "name": "withdraw_dynamic",
+          "discriminator_hex": "26",
+          "handler": "withdraw_dynamic",
+          "accounts": [
+            {"name": "escrow", "index": 0, "is_signer_expected": false, "is_writable_expected": false,
+             "pda": {"seeds": ["escrow"], "dynamic_seed_count": 1}}
+          ]
+        }
+      ]
+    }"#;
+
+    fn native_exp() -> ExpectationsDoc {
+        serde_json::from_str(NATIVE_EXPECTATIONS).expect("parse native expectations")
+    }
+
+    fn native_mapped(pubkey: String, account_index: u8, is_signer: bool, is_writable: bool) -> MappedAccount {
+        MappedAccount { name: None, pubkey, account_index, is_signer, is_writable }
+    }
+
+    fn native_report(program_id: String, name: &str, accounts: Vec<MappedAccount>) -> TransactionReport {
+        let report_accounts: Vec<AccountInfo> = accounts
+            .iter()
+            .enumerate()
+            .map(|(i, a)| AccountInfo {
+                index: i as u8,
+                pubkey: a.pubkey.clone(),
+                is_signer: a.is_signer,
+                is_writable: a.is_writable,
+                role: None,
+                pda_info: None,
+            })
+            .collect();
+        TransactionReport {
+            status: "OK".into(),
+            fee_payer: "11111111111111111111111111111111".into(),
+            signatures: vec![],
+            recent_blockhash: "11111111111111111111111111111111".into(),
+            message_version: None,
+            accounts: report_accounts,
+            instructions: vec![DecodedInstruction {
+                index: 0,
+                program_id,
+                program_name: "Mango".into(),
+                instruction_name: Some(name.to_string()),
+                accounts,
+                data: serde_json::Value::Null,
+                raw_data_hex: String::new(),
+                token_amount: None,
+            }],
+            address_lookup_tables: vec![],
+            compute_budget: None,
+            risk_flags: vec![],
+            simulation: None,
+            warnings: vec![],
+            signature_verification: vec![],
+        }
+    }
+
+    #[test]
+    fn native_missing_signer_flags_critical() {
+        let exp = native_exp();
+        let report = native_report(
+            "MangoPid1111111111111111111111111111111111".into(),
+            "WithdrawMsrm",
+            vec![
+                native_mapped("pk0".into(), 0, false, false),
+                native_mapped("pk1".into(), 1, false, false),
+                native_mapped("pk2".into(), 2, false, false),
+                native_mapped("pk3".into(), 3, false, false),
+            ],
+        );
+        let mut flags = Vec::new();
+        validate_native_missing_signers(&report, &exp, &mut flags);
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0].category, RiskCategory::MissingSigner);
+        assert_eq!(flags[0].severity, RiskSeverity::Critical);
+        assert!(flags[0].message.contains("owner_ai"));
+    }
+
+    #[test]
+    fn native_clean_signer_no_flag() {
+        let exp = native_exp();
+        let report = native_report(
+            "MangoPid1111111111111111111111111111111111".into(),
+            "WithdrawMsrm",
+            vec![
+                native_mapped("pk0".into(), 0, false, false),
+                native_mapped("pk1".into(), 1, false, false),
+                native_mapped("pk2".into(), 2, true, false),
+                native_mapped("pk3".into(), 3, false, true),
+            ],
+        );
+        let mut flags = Vec::new();
+        validate_native_missing_signers(&report, &exp, &mut flags);
+        assert!(flags.is_empty());
+    }
+
+    #[test]
+    fn native_pda_tier2_mismatch_critical() {
+        use solana_sdk::pubkey::Pubkey;
+        let exp = native_exp();
+        let program_id = Pubkey::new_unique();
+        let (expected, _) = Pubkey::find_program_address(&[b"escrow"], &program_id);
+        let mut report = native_report(
+            program_id.to_string(),
+            "withdraw_escrow",
+            vec![
+                native_mapped(Pubkey::new_unique().to_string(), 0, false, true),
+                native_mapped(Pubkey::new_unique().to_string(), 1, true, false),
+            ],
+        );
+        let mut flags = Vec::new();
+        validate_native_pda_seeds_tier2(&mut report, &exp, &mut flags);
+        let pda = report.accounts[0].pda_info.as_ref().expect("pda_info populated");
+        assert_eq!(pda.expected_address.as_deref(), Some(expected.to_string().as_str()));
+        assert!(pda.bump.is_some());
+        assert!(
+            flags.iter().any(|f| f.category == RiskCategory::PdaSeedMismatch && f.severity == RiskSeverity::Critical)
+        );
+    }
+
+    #[test]
+    fn native_pda_tier2_match_no_flag() {
+        use solana_sdk::pubkey::Pubkey;
+        let exp = native_exp();
+        let program_id = Pubkey::new_unique();
+        let (expected, _) = Pubkey::find_program_address(&[b"escrow"], &program_id);
+        let mut report = native_report(
+            program_id.to_string(),
+            "withdraw_escrow",
+            vec![
+                native_mapped(expected.to_string(), 0, false, true),
+                native_mapped(Pubkey::new_unique().to_string(), 1, true, false),
+            ],
+        );
+        let mut flags = Vec::new();
+        validate_native_pda_seeds_tier2(&mut report, &exp, &mut flags);
+        assert!(
+            !flags.iter().any(|f| f.category == RiskCategory::PdaSeedMismatch && f.severity == RiskSeverity::Critical)
+        );
+        assert!(report.accounts[0].pda_info.is_some());
+    }
+
+    #[test]
+    fn native_dynamic_seeds_warning() {
+        use solana_sdk::pubkey::Pubkey;
+        let exp = native_exp();
+        let program_id = Pubkey::new_unique();
+        let (expected, _) = Pubkey::find_program_address(&[b"escrow"], &program_id);
+        let mut report = native_report(
+            program_id.to_string(),
+            "withdraw_dynamic",
+            vec![native_mapped(expected.to_string(), 0, false, false)],
+        );
+        let mut flags = Vec::new();
+        validate_native_pda_seeds_tier2(&mut report, &exp, &mut flags);
+        assert!(
+            flags.iter().any(|f| f.category == RiskCategory::PdaSeedMismatch && f.severity == RiskSeverity::Warning)
+        );
+        assert!(flags[0].message.contains("runtime values"));
+        assert!(!flags.iter().any(|f| f.severity == RiskSeverity::Critical));
+    }
+
+    #[test]
+    fn native_writable_mismatch_warning() {
+        let exp = native_exp();
+        let report = native_report(
+            "MangoPid1111111111111111111111111111111111".into(),
+            "WithdrawMsrm",
+            vec![
+                native_mapped("pk0".into(), 0, false, false),
+                native_mapped("pk1".into(), 1, false, false),
+                native_mapped("pk2".into(), 2, true, false),
+                native_mapped("pk3".into(), 3, false, false),
+            ],
+        );
+        let mut flags = Vec::new();
+        validate_native_writable_roles(&report, &exp, &mut flags);
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0].category, RiskCategory::WritableMismatch);
+        assert_eq!(flags[0].severity, RiskSeverity::Warning);
+        assert!(flags[0].message.contains("vault_ai"));
+    }
+
+    #[test]
+    fn native_account_count_mismatch_warning() {
+        let exp = native_exp();
+        let report = native_report(
+            "MangoPid1111111111111111111111111111111111".into(),
+            "WithdrawMsrm",
+            (0..5).map(|i| native_mapped(format!("pk{i}"), i as u8, false, false)).collect(),
+        );
+        let mut flags = Vec::new();
+        validate_native_account_counts(&report, &exp, &mut flags);
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0].category, RiskCategory::NativeAccountMismatch);
+        assert!(flags[0].message.contains("5 accounts but the expectations declare 3"));
+    }
+
+    #[test]
+    fn validate_entry_native_runs_checks() {
+        use solana_sdk::pubkey::Pubkey;
+        let exp = native_exp();
+        let mut report = native_report(
+            "MangoPid1111111111111111111111111111111111".into(),
+            "WithdrawMsrm",
+            vec![
+                native_mapped(Pubkey::new_unique().to_string(), 0, false, false),
+                native_mapped(Pubkey::new_unique().to_string(), 1, false, false),
+                native_mapped(Pubkey::new_unique().to_string(), 2, false, false),
+                native_mapped(Pubkey::new_unique().to_string(), 3, false, false),
+            ],
+        );
+        validate(&mut report, Some(&ProgramSchema::Native(exp)));
+        assert!(
+            report
+                .risk_flags
+                .iter()
+                .any(|f| f.category == RiskCategory::MissingSigner && f.severity == RiskSeverity::Critical)
+        );
     }
 }

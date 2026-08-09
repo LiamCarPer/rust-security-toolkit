@@ -310,7 +310,7 @@ fn test_missing_signer_with_idl() {
         token_amount: None,
     });
 
-    validator::validate(&mut report, Some(&idl));
+    validator::validate(&mut report, Some(&ProgramSchema::Idl(idl)));
     assert!(report.risk_flags.iter().any(|f| f.category == RiskCategory::MissingSigner));
 }
 
@@ -352,7 +352,7 @@ fn test_signer_present_not_flagged() {
         token_amount: None,
     });
 
-    validator::validate(&mut report, Some(&idl));
+    validator::validate(&mut report, Some(&ProgramSchema::Idl(idl)));
     assert!(!report.risk_flags.iter().any(|f| f.category == RiskCategory::MissingSigner));
 }
 
@@ -530,14 +530,18 @@ fn test_tx_report_sat_contract() {
         types: vec![],
     };
 
-    let mut report = decoder::decode_raw_bytes(&serialized, Some(&idl)).expect("Decode with IDL");
-    validator::validate(&mut report, Some(&idl));
+    let schema = ProgramSchema::Idl(idl);
+    let mut report = decoder::decode_raw_bytes(&serialized, Some(&schema)).expect("Decode with IDL");
+    validator::validate(&mut report, Some(&schema));
 
     // Decoder populated IDL names on the mapped accounts.
     assert_eq!(report.instructions[0].accounts[0].name.as_deref(), Some("from"));
     assert_eq!(report.instructions[0].accounts[1].name.as_deref(), Some("authority"));
     assert_eq!(report.instructions[0].accounts[2].name.as_deref(), Some("vault"));
 
+    let ProgramSchema::Idl(idl) = schema else {
+        unreachable!("schema was built as Idl");
+    };
     let json_str = ui::render_tx_report(&report, &idl.name);
     let sat: SatTxReport = serde_json::from_str(&json_str).expect("report must parse into sat's contract");
 
@@ -895,7 +899,7 @@ fn test_idl_account_count_mismatch_flag() {
         token_amount: None,
     });
 
-    validator::validate(&mut report, Some(&idl));
+    validator::validate(&mut report, Some(&ProgramSchema::Idl(idl)));
     assert!(report.risk_flags.iter().any(|f| f.category == RiskCategory::IdlAccountMismatch));
 }
 
@@ -920,7 +924,7 @@ fn test_idl_account_count_ok() {
         token_amount: None,
     });
 
-    validator::validate(&mut report, Some(&idl));
+    validator::validate(&mut report, Some(&ProgramSchema::Idl(idl)));
     assert!(!report.risk_flags.iter().any(|f| f.category == RiskCategory::IdlAccountMismatch));
 }
 

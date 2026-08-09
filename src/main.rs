@@ -3,7 +3,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 use rust_security_toolkit::types::{ExpectationsDoc, IdlJson, ProgramSchema, RiskSeverity, TransactionReport};
-use rust_security_toolkit::{decoder, patterns, sim_crossref, simulator, ui, validator};
+use rust_security_toolkit::{decoder, patterns, signature_verify, sim_crossref, simulator, ui, validator};
 
 #[derive(Parser)]
 #[command(
@@ -55,6 +55,14 @@ struct Cli {
     #[arg(long = "no-network")]
     no_network: bool,
 
+    /// Fetch the transaction by base58 signature from the RPC endpoint, then analyze it.
+    #[arg(long = "signature", value_name = "BASE58", requires = "rpc", conflicts_with_all = ["tx_input", "file"])]
+    signature: Option<String>,
+
+    /// Pattern detection configuration JSON (per-rule severity overrides and toggles)
+    #[arg(long = "patterns", value_name = "PATH")]
+    patterns_config: Option<PathBuf>,
+
     /// Run internal byte-level parser alongside solana-sdk and flag any structural disagreements
     #[arg(long = "validate-decoding")]
     validate_decoding: bool,
@@ -66,18 +74,25 @@ async fn main() -> Result<()> {
 
     // All input sources are read as bytes so raw binary transactions work
     // from stdin and --file; encoding detection applies to UTF-8 text.
-    let input_bytes: Vec<u8> = match (cli.tx_input, &cli.file) {
-        (Some(input), _) if input == "-" => {
-            use std::io::Read;
-            let mut buffer = Vec::new();
-            std::io::stdin().read_to_end(&mut buffer).context("Failed to read transaction from stdin")?;
-            buffer
-        }
-        (Some(input), _) => input.into_bytes(),
-        (None, Some(path)) => std::fs::read(path).context("Failed to read transaction file")?,
-        (None, None) => {
-            eprintln!("Error: No transaction input provided. Use TX_BYTES, --file, or pipe via stdin.");
-            std::process::exit(1);
+    let input_bytes: Vec<u8> = if let Some(ref sig) = cli.signature {
+        let rpc_url = cli.rpc.as_ref().context("--signature requires --rpc")?;
+        simulator::fetch_transaction_by_signature(rpc_url, sig).await?
+    } else {
+        match (cli.tx_input, &cli.file) {
+            (Some(input), _) if input == "-" => {
+                use std::io::Read;
+                let mut buffer = Vec::new();
+                std::io::stdin().read_to_end(&mut buffer).context("Failed to read transaction from stdin")?;
+                buffer
+            }
+            (Some(input), _) => input.into_bytes(),
+            (None, Some(path)) => std::fs::read(path).context("Failed to read transaction file")?,
+            (None, None) => {
+                eprintln!(
+                    "Error: No transaction input provided. Use TX_BYTES, --file, --signature, or pipe via stdin."
+                );
+                std::process::exit(1);
+            }
         }
     };
 
@@ -113,7 +128,26 @@ async fn main() -> Result<()> {
 
     let (raw_bytes_decoded, mut report) = decoder::decode_input(&input_bytes, schema.as_ref())?;
     validator::validate(&mut report, schema.as_ref());
-    let pattern_flags = patterns::detect_patterns(&report);
+
+    match bincode::deserialize::<solana_sdk::transaction::VersionedTransaction>(&raw_bytes_decoded) {
+        Ok(tx) => {
+            report.signature_verification = signature_verify::verify_transaction(&tx);
+            let sig_flags = signature_verify::verify_report(&mut report);
+            report.risk_flags.extend(sig_flags);
+        }
+        Err(e) => {
+            report.warnings.push(format!("Signature verification skipped: {}", e));
+        }
+    }
+
+    let pattern_flags = match &cli.patterns_config {
+        Some(path) => {
+            let contents = std::fs::read_to_string(path).context("Failed to read patterns config")?;
+            let config = patterns::parse_pattern_config(&contents)?;
+            patterns::detect_patterns_with_config(&report, &config)
+        }
+        None => patterns::detect_patterns(&report),
+    };
     report.risk_flags.extend(pattern_flags);
 
     if cli.validate_decoding {

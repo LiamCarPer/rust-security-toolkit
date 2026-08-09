@@ -31,6 +31,19 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
     }
 
     println!("[+] Fee Payer: {} (Account #0)", truncate_key(&report.fee_payer));
+    if !report.signature_verification.is_empty() {
+        println!("[+] Signatures:");
+        for check in &report.signature_verification {
+            let (icon, color) = if check.verified { ("[OK]", Color::Green) } else { ("[FAIL]", Color::Red) };
+            println!(
+                "    {} #{}: {} ({})",
+                icon.color(color).bold(),
+                check.index,
+                truncate_key(&check.pubkey),
+                check.note
+            );
+        }
+    }
     if let Some(ref cb) = report.compute_budget {
         let limit_label = if cb.compute_unit_limit_set {
             format!("{} CU (Custom Limit Set)", cb.compute_unit_limit)
@@ -145,6 +158,27 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
         }
     }
     println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
+
+    // ── Per-Instruction Compute Units ───────────────────────────────────────
+    if let Some(ref sim) = report.simulation
+        && !sim.instruction_cu.is_empty()
+    {
+        println!();
+        println!("{}", "┌── Per-Instruction Compute Units (from simulation logs) ─────────────────────────┐".bold());
+        for cu in &sim.instruction_cu {
+            let name = report
+                .instructions
+                .iter()
+                .find(|ix| ix.index == cu.instruction_index)
+                .map(|ix| ix.instruction_name.as_deref().unwrap_or(&ix.program_name))
+                .unwrap_or("unknown");
+            println!(
+                "│ Instruction #{} ({}): {} CU (limit {})",
+                cu.instruction_index, name, cu.units_consumed, cu.cu_limit
+            );
+        }
+        println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
+    }
 
     // ── Structural Risk Flags ───────────────────────────────────────────────
     if !report.risk_flags.is_empty() {

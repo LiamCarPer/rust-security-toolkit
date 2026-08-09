@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Per-instruction CU attribution**: the simulation cross-reference parses
+  Program X consumed N of M compute units log lines into a per-instruction CU
+  table (new SimulationResult.instruction_cu), shown on the dashboard; flags
+  Info-level estimate-vs-actual deviations suggesting estimate_cu_cost
+  recalibration
+- **CU estimate audit** (src/decoder.rs): corrected System Transfer (1.5k to 1k),
+  Allocate/Assign, System default, and Token Initialize* (15k to 5k) entries;
+  estimate_cu_cost exposed pub(crate) for the cross-reference
+- **Offline signature verification** (src/signature_verify.rs): per-signer
+  ed25519 verification against the serialized message; fee-payer failures are
+  Critical, other signer failures Warning (SignatureMismatch category)
+- **Fetch by signature**: --signature BASE58 (requires --rpc) fetches the
+  transaction via getTransaction and runs the full analysis pipeline
+- **Pattern config**: --patterns PATH JSON enables per-rule severity overrides
+  and disabling for the five pattern rules; unknown keys/severities are hard errors
 - **Transaction-layer pattern detection** (`src/patterns.rs`): approve-then-
   transfer delegate drain, non-signing token transfer authorities, fee payer
   as recipient, repeated destinations, and mint-authority takeover with

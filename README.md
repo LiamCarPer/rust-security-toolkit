@@ -16,6 +16,9 @@
 - **Transaction-layer pattern detection** — Flags multi-instruction attack-shaped flows: approve-then-transfer (delegate drain), non-signing transfer authorities, fee-payer-as-recipient, repeated destinations, and mint-authority takeover paired with minting in one transaction.
 - **Simulation↔decode cross-reference** — With `--rpc`, compares the simulation against the local decode: failing instruction index agreement, CU consumed vs declared limit, log-to-instruction invocation counts, and the *actual* (not worst-case) priority fee from `units_consumed`.
 - **Dynamic program verification** — On-chain program ownership checks (BPFLoader, BPFLoaderUpgradeable) and Solana Verified Build Registry lookups to confirm deployed bytecode matches a public source repository. The registry URL is configurable via `--registry`.
+- **Offline signature verification** - Cryptographically verifies each required signer's ed25519 signature against the serialized message; fee-payer failures are Critical, other signer failures Warning.
+- **Fetch by signature** - `--signature <base58>` pulls the transaction from the RPC endpoint (`getTransaction`) and runs the full analysis pipeline.
+- **Per-instruction compute units** - The simulation cross-reference parses `consumed N of M compute units` log lines into a per-instruction CU table and flags estimate-vs-actual deviations that suggest recalibration.
 - **Severity-based exit codes** — The CLI exits `0` (clean), `1` (Info/Warning flags), or `2` (any Critical flag), so scripts and CI can gate on audit results.
 - **Cross-tool integration** — Structured JSON export (`--output-tx-report`) consumable by the Solana Audit Toolkit (`sat`) for correlating runtime account configuration against static `#[derive(Accounts)]` analysis.
 - **Internal correctness gate** — `--validate-decoding` runs a lightweight byte-level parser alongside `solana-sdk` and cross-checks every structural count (signatures, accounts, instructions, ALT lookups) against the SDK decode, surfacing internal tooling bugs as `TOOL_DECODE_MISMATCH` warnings.
@@ -103,6 +106,13 @@ rts --rpc https://api.mainnet-beta.solana.com --registry https://registry.exampl
 # Offline mode (skips simulation, ownership checks, verified build registry)
 rts --no-network <tx_bytes>
 
+# Analyze a transaction by base58 signature (fetches via getTransaction)
+rts --rpc https://api.mainnet-beta.solana.com --signature <base58_sig>
+
+# Pattern detection with per-rule severity overrides (patterns.json)
+# { "rules": { "approve_then_transfer": { "severity": "critical" }, "repeated_destination": { "enabled": false } } }
+rts --patterns patterns.json <tx_bytes>
+
 # Validate internal decoder against solana-sdk
 rts --validate-decoding <tx_bytes>
 ```
@@ -122,6 +132,8 @@ Options:
   -f, --file <PATH>               Read transaction bytes from a file
       --idl <PATH>                 Anchor IDL JSON for instruction decoding and validation
       --rpc <URL>                  RPC endpoint for simulation and on-chain verification
+      --signature <BASE58>          Fetch and analyze a transaction by base58 signature (requires --rpc)
+      --patterns <PATH>             Pattern detection config JSON (per-rule severity overrides)
       --registry <URL>             Verified build registry URL (default: https://verify.osec.io)
       --json                       Output structured JSON instead of the terminal dashboard
       --output-tx-report <PATH>    Export transaction execution report for sat integration

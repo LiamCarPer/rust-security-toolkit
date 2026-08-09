@@ -20,6 +20,8 @@
 - **Offline signature verification** - Cryptographically verifies each required signer's ed25519 signature against the serialized message; fee-payer failures are Critical, other signer failures Warning.
 - **Fetch by signature** - `--signature <base58>` pulls the transaction from the RPC endpoint (`getTransaction`) and runs the full analysis pipeline.
 - **Per-instruction compute units** - The simulation cross-reference parses `consumed N of M compute units` log lines into a per-instruction CU table and flags estimate-vs-actual deviations that suggest recalibration.
+- **Real mainnet attack corpus** - committed mainnet transactions (close-account sweeps, Token-2022 transfers, reordered compute budget) plus SDK-built attack shapes (approve-drain, mint takeover) decoded end-to-end offline in tests/attack_corpus.rs
+- **Actual high-CU flagging** - when simulation reports per-instruction compute units, the estimate-based high-CU warnings are superseded: refuted flags are removed and warnings are emitted from actual consumption
 - **Severity-based exit codes** — The CLI exits `0` (clean), `1` (Info/Warning flags), or `2` (any Critical flag), so scripts and CI can gate on audit results.
 - **Cross-tool integration** — Structured JSON export (`--output-tx-report`) consumable by the Solana Audit Toolkit (`sat`) for correlating runtime account configuration against static `#[derive(Accounts)]` analysis.
 - **Internal correctness gate** — `--validate-decoding` runs a lightweight byte-level parser alongside `solana-sdk` and cross-checks every structural count (signatures, accounts, instructions, ALT lookups) against the SDK decode, surfacing internal tooling bugs as `TOOL_DECODE_MISMATCH` warnings.
@@ -216,6 +218,13 @@ cargo test --test mainnet_fixtures
 cargo test --test properties
 
 # Fuzz the decoder (requires nightly):
+
+# Fuzz the pattern, cross-reference, expectations, and signature-verification
+# surfaces (patterns.rs, sim_crossref.rs, expectations.rs, signature_verify.rs)
+cargo +nightly fuzz run patterns
+cargo +nightly fuzz run sim_crossref
+cargo +nightly fuzz run expectations
+cargo +nightly fuzz run signature_verify
 cargo +nightly fuzz run decode
 ```
 

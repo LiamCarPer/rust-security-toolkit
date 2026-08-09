@@ -19,6 +19,18 @@ All notable changes to this project are documented in this file.
 - **Fetch by signature**: --signature BASE58 (requires --rpc) fetches the
   transaction via getTransaction and runs the full analysis pipeline
 - **Pattern config**: --patterns PATH JSON enables per-rule severity overrides
+- **Actual high-CU flagging**: when simulation per-instruction CU is
+  available, estimate-based HighComputeUnitUsage warnings are superseded
+  (refuted flags removed, actual-consumption warnings emitted);
+  high_cu_threshold extracted from the estimate logic
+- **Real mainnet attack corpus**: tests/fixtures/mainnet_attacks holds six
+  real mainnet transactions (close-account sweeps, Token-2022 transfers,
+  reordered compute budget, missing CU limit) plus six SDK-built attack
+  shapes; tests/attack_corpus.rs validates decode, signature verification,
+  and flag expectations offline; a refresh test rescans recent blocks
+- **Fuzz targets + property tests**: libFuzzer targets for patterns,
+  sim_crossref, expectations_decoder, and signature_verify (fuzz crate),
+  and proptest no-panic suites for the same surfaces in tests/properties.rs
 - **Native program expectations** (--expectations): consumes sat native expectations
   documents as the IDL analog for IDL-less programs; 1-byte/8-byte discriminator
   matching (expectations_decoder), positional account roles, static PDA seeds,

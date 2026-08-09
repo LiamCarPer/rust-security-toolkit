@@ -412,8 +412,12 @@ pub(crate) fn estimate_cu_cost(ix: &DecodedInstruction) -> u32 {
     }
 }
 
+pub(crate) fn high_cu_threshold(cu_limit: u32) -> u32 {
+    (cu_limit / 5).clamp(5_000, 10_000)
+}
+
 fn estimate_high_cu_instructions(instructions: &[DecodedInstruction], cu_limit: u32) -> Vec<u8> {
-    let threshold = (cu_limit / 5).clamp(5000, 10_000);
+    let threshold = high_cu_threshold(cu_limit);
     instructions
         .iter()
         .filter_map(|ix| {
@@ -425,7 +429,9 @@ fn estimate_high_cu_instructions(instructions: &[DecodedInstruction], cu_limit: 
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_raw_bytes, estimate_cu_cost, estimate_high_cu_instructions, parse_compute_budget};
+    use super::{
+        decode_raw_bytes, estimate_cu_cost, estimate_high_cu_instructions, high_cu_threshold, parse_compute_budget,
+    };
     use crate::types::DecodedInstruction;
 
     fn cb(data: &[u8]) -> (u32, u64) {
@@ -591,6 +597,13 @@ mod tests {
         let instructions =
             vec![ix("System Program", Some("CreateAccount"), 0), ix("System Program", Some("Transfer"), 1)];
         assert_eq!(estimate_high_cu_instructions(&instructions, 200_000), vec![0]);
+    }
+
+    #[test]
+    fn high_cu_threshold_formula() {
+        assert_eq!(high_cu_threshold(200_000), 10_000);
+        assert_eq!(high_cu_threshold(20_000), 5_000);
+        assert_eq!(high_cu_threshold(1_400_000), 10_000);
     }
 
     /// Regression: the writable-header derivation must match the runtime rule

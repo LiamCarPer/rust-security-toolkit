@@ -275,6 +275,7 @@ fn decode_versioned_tx(tx: VersionedTransaction, idl: Option<&IdlJson>) -> Resul
         risk_flags: Vec::new(),
         simulation: None,
         warnings: Vec::new(),
+        signature_verification: Vec::new(),
     })
 }
 

@@ -575,6 +575,7 @@ mod tests {
             risk_flags: vec![],
             simulation: None,
             warnings: vec![],
+            signature_verification: vec![],
         };
 
         let mut flags = Vec::new();
@@ -605,6 +606,7 @@ mod tests {
             risk_flags: vec![],
             simulation: None,
             warnings: vec![],
+            signature_verification: vec![],
         };
 
         let mut flags = Vec::new();
@@ -644,6 +646,7 @@ mod tests {
             risk_flags: vec![],
             simulation: None,
             warnings: vec![],
+            signature_verification: vec![],
         };
 
         validate(&mut report, None);

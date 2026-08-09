@@ -192,6 +192,7 @@ mod tests {
             risk_flags,
             simulation: None,
             warnings: Vec::new(),
+            signature_verification: Vec::new(),
         }
     }
 

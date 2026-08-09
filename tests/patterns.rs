@@ -53,6 +53,7 @@ fn report(instructions: Vec<DecodedInstruction>) -> TransactionReport {
         risk_flags: Vec::new(),
         simulation: None,
         warnings: Vec::new(),
+        signature_verification: Vec::new(),
     }
 }
 

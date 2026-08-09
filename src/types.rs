@@ -21,6 +21,18 @@ pub struct TransactionReport {
     pub risk_flags: Vec<RiskFlag>,
     pub simulation: Option<SimulationResult>,
     pub warnings: Vec<String>,
+    /// Per-signer offline cryptographic verification of the message
+    /// signatures; populated whenever the transaction carries signatures.
+    #[serde(default)]
+    pub signature_verification: Vec<SignatureCheck>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignatureCheck {
+    pub index: u8,
+    pub pubkey: String,
+    pub verified: bool,
+    pub note: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +137,19 @@ pub struct SimulationResult {
     /// Index of the instruction that failed, when the error is an InstructionError.
     #[serde(default)]
     pub error_instruction_index: Option<u8>,
+    /// Per-instruction compute unit attribution parsed from the simulation
+    /// log stream; empty when logs did not carry consumption lines.
+    #[serde(default)]
+    pub instruction_cu: Vec<InstructionCu>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstructionCu {
+    pub instruction_index: u8,
+    pub program_id: String,
+    pub units_consumed: u64,
+    /// The compute unit limit in effect when the instruction completed.
+    pub cu_limit: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +189,26 @@ pub enum RiskCategory {
     /// Disagreement between a simulation result and the local decode
     /// (error index, CU accounting, log-to-instruction correlation).
     SimulationMismatch,
+    /// A message signature failed offline verification (tampered, missing,
+    /// or mismatched signer); fee-payer failures are Critical.
+    SignatureMismatch,
+}
+
+/// Per-rule pattern configuration. Severity strings are parsed by the
+/// patterns module ("info" | "warning" | "critical"); unknown keys or
+/// severities are hard errors.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PatternConfig {
+    #[serde(default)]
+    pub rules: std::collections::BTreeMap<String, PatternRuleOverride>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PatternRuleOverride {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub severity: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

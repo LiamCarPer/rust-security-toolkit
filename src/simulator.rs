@@ -129,6 +129,7 @@ pub async fn simulate_transaction(rpc_url: &str, raw_tx_base64: &str) -> Result<
             return_data: None,
             error_code: None,
             error_instruction_index: None,
+            instruction_cu: Vec::new(),
         });
     }
 
@@ -143,6 +144,7 @@ pub async fn simulate_transaction(rpc_url: &str, raw_tx_base64: &str) -> Result<
                 return_data: None,
                 error_code: None,
                 error_instruction_index: None,
+                instruction_cu: Vec::new(),
             });
         }
     };
@@ -157,7 +159,16 @@ pub async fn simulate_transaction(rpc_url: &str, raw_tx_base64: &str) -> Result<
         .return_data
         .and_then(|rd| rd.get("data").and_then(|d| d.get(0)).and_then(|d| d.as_str()).map(String::from));
 
-    Ok(SimulationResult { success, error, logs, units_consumed, return_data, error_code, error_instruction_index })
+    Ok(SimulationResult {
+        success,
+        error,
+        logs,
+        units_consumed,
+        return_data,
+        error_code,
+        error_instruction_index,
+        instruction_cu: Vec::new(),
+    })
 }
 
 // ── Address Lookup Table Resolution ─────────────────────────────────────────

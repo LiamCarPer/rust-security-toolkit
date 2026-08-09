@@ -152,6 +152,7 @@ fn make_report() -> TransactionReport {
         risk_flags: vec![],
         simulation: None,
         warnings: vec![],
+        signature_verification: vec![],
     }
 }
 
@@ -402,6 +403,7 @@ fn make_report_with_data() -> TransactionReport {
         risk_flags: vec![],
         simulation: None,
         warnings: vec![],
+        signature_verification: vec![],
     }
 }
 

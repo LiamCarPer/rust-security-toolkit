@@ -1,17 +1,79 @@
 use crate::types::{
-    DecodedInstruction, MappedAccount, RiskCategory, RiskFlag, RiskSeverity, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
-    TOKEN_PROGRAM_ID, TransactionReport,
+    DecodedInstruction, MappedAccount, PatternConfig, RiskCategory, RiskFlag, RiskSeverity, SYSTEM_PROGRAM_ID,
+    TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, TransactionReport,
 };
 use std::collections::BTreeMap;
 
+const RULE_APPROVE_THEN_TRANSFER: &str = "approve_then_transfer";
+const RULE_NONSIGNER_TRANSFER_AUTHORITY: &str = "nonsigner_transfer_authority";
+const RULE_FEE_PAYER_RECIPIENT: &str = "fee_payer_recipient";
+const RULE_REPEATED_DESTINATION: &str = "repeated_destination";
+const RULE_MINT_AUTHORITY_TAKEOVER: &str = "mint_authority_takeover";
+
+const KNOWN_RULE_KEYS: [&str; 5] = [
+    RULE_APPROVE_THEN_TRANSFER,
+    RULE_NONSIGNER_TRANSFER_AUTHORITY,
+    RULE_FEE_PAYER_RECIPIENT,
+    RULE_REPEATED_DESTINATION,
+    RULE_MINT_AUTHORITY_TAKEOVER,
+];
+
 pub fn detect_patterns(report: &TransactionReport) -> Vec<RiskFlag> {
+    detect_patterns_with_config(report, &PatternConfig::default())
+}
+
+pub fn detect_patterns_with_config(report: &TransactionReport, config: &PatternConfig) -> Vec<RiskFlag> {
     let mut flags = Vec::new();
-    detect_approve_then_transfer(report, &mut flags);
-    detect_nonsigner_transfer_authority(report, &mut flags);
-    detect_fee_payer_recipient(report, &mut flags);
-    detect_repeated_destination(report, &mut flags);
-    detect_mint_authority_takeover(report, &mut flags);
+    if let Some(severity) = rule_severity(config, RULE_APPROVE_THEN_TRANSFER, RiskSeverity::Warning) {
+        detect_approve_then_transfer(report, severity, &mut flags);
+    }
+    if let Some(severity) = rule_severity(config, RULE_NONSIGNER_TRANSFER_AUTHORITY, RiskSeverity::Warning) {
+        detect_nonsigner_transfer_authority(report, severity, &mut flags);
+    }
+    if let Some(severity) = rule_severity(config, RULE_FEE_PAYER_RECIPIENT, RiskSeverity::Info) {
+        detect_fee_payer_recipient(report, severity, &mut flags);
+    }
+    if let Some(severity) = rule_severity(config, RULE_REPEATED_DESTINATION, RiskSeverity::Info) {
+        detect_repeated_destination(report, severity, &mut flags);
+    }
+    if let Some(severity) = rule_severity(config, RULE_MINT_AUTHORITY_TAKEOVER, RiskSeverity::Warning) {
+        detect_mint_authority_takeover(report, severity, &mut flags);
+    }
     flags
+}
+
+pub fn parse_pattern_config(json: &str) -> anyhow::Result<PatternConfig> {
+    let config: PatternConfig = serde_json::from_str(json)?;
+    for (key, rule) in &config.rules {
+        if !KNOWN_RULE_KEYS.contains(&key.as_str()) {
+            anyhow::bail!("unknown pattern rule key: {}", key);
+        }
+        if let Some(severity) = &rule.severity
+            && parse_severity(severity).is_none()
+        {
+            anyhow::bail!("invalid pattern severity: {}", severity);
+        }
+    }
+    Ok(config)
+}
+
+fn parse_severity(s: &str) -> Option<RiskSeverity> {
+    match s {
+        "info" => Some(RiskSeverity::Info),
+        "warning" => Some(RiskSeverity::Warning),
+        "critical" => Some(RiskSeverity::Critical),
+        _ => None,
+    }
+}
+
+fn rule_severity(config: &PatternConfig, key: &str, default: RiskSeverity) -> Option<RiskSeverity> {
+    let Some(rule) = config.rules.get(key) else {
+        return Some(default);
+    };
+    if rule.enabled == Some(false) {
+        return None;
+    }
+    Some(rule.severity.as_deref().and_then(parse_severity).unwrap_or(default))
 }
 
 fn is_token_program(program_id: &str) -> bool {
@@ -32,7 +94,7 @@ fn pattern_flag(severity: RiskSeverity, index: u8, message: String, details: &st
     }
 }
 
-fn detect_approve_then_transfer(report: &TransactionReport, flags: &mut Vec<RiskFlag>) {
+fn detect_approve_then_transfer(report: &TransactionReport, severity: RiskSeverity, flags: &mut Vec<RiskFlag>) {
     for approve_ix in &report.instructions {
         let Some(approve_name) = approve_ix.instruction_name.as_deref() else { continue };
         if approve_name != "Approve" && approve_name != "ApproveChecked" {
@@ -63,7 +125,7 @@ fn detect_approve_then_transfer(report: &TransactionReport, flags: &mut Vec<Risk
                 continue;
             }
             flags.push(pattern_flag(
-                RiskSeverity::Warning,
+                severity.clone(),
                 transfer_ix.index,
                 format!(
                     "Instruction #{} {} authorizes delegate {} then #{} {} spends from it in the same transaction",
@@ -77,7 +139,7 @@ fn detect_approve_then_transfer(report: &TransactionReport, flags: &mut Vec<Risk
     }
 }
 
-fn detect_nonsigner_transfer_authority(report: &TransactionReport, flags: &mut Vec<RiskFlag>) {
+fn detect_nonsigner_transfer_authority(report: &TransactionReport, severity: RiskSeverity, flags: &mut Vec<RiskFlag>) {
     for ix in &report.instructions {
         let Some(name) = ix.instruction_name.as_deref() else { continue };
         let (role, pos) = match (ix.program_id.as_str(), name) {
@@ -91,7 +153,7 @@ fn detect_nonsigner_transfer_authority(report: &TransactionReport, flags: &mut V
             continue;
         }
         flags.push(pattern_flag(
-            RiskSeverity::Warning,
+            severity.clone(),
             ix.index,
             format!("transfer authority does not sign the transaction on instruction #{}", ix.index),
             "The authority of a token transfer must sign the transaction; a non-signing authority means the \
@@ -100,14 +162,14 @@ fn detect_nonsigner_transfer_authority(report: &TransactionReport, flags: &mut V
     }
 }
 
-fn detect_fee_payer_recipient(report: &TransactionReport, flags: &mut Vec<RiskFlag>) {
+fn detect_fee_payer_recipient(report: &TransactionReport, severity: RiskSeverity, flags: &mut Vec<RiskFlag>) {
     for ix in &report.instructions {
         let Some(recipient) = transfer_of_money(ix) else { continue };
         if recipient.pubkey != report.fee_payer {
             continue;
         }
         flags.push(pattern_flag(
-            RiskSeverity::Info,
+            severity.clone(),
             ix.index,
             format!("fee payer {} is the recipient of instruction #{}", report.fee_payer, ix.index),
             "The fee payer of the transaction also receives funds from the same transaction; verify that the fee \
@@ -116,7 +178,7 @@ fn detect_fee_payer_recipient(report: &TransactionReport, flags: &mut Vec<RiskFl
     }
 }
 
-fn detect_repeated_destination(report: &TransactionReport, flags: &mut Vec<RiskFlag>) {
+fn detect_repeated_destination(report: &TransactionReport, severity: RiskSeverity, flags: &mut Vec<RiskFlag>) {
     let mut destinations: BTreeMap<&str, Vec<u8>> = BTreeMap::new();
     for ix in &report.instructions {
         let Some(recipient) = transfer_of_money(ix) else { continue };
@@ -128,7 +190,7 @@ fn detect_repeated_destination(report: &TransactionReport, flags: &mut Vec<RiskF
         }
         let listed = indices.iter().map(|i| format!("#{}", i)).collect::<Vec<_>>().join(", ");
         flags.push(pattern_flag(
-            RiskSeverity::Info,
+            severity.clone(),
             indices[0],
             format!("destination {} receives funds in multiple instructions: {}", pubkey, listed),
             "The same account is the recipient of several money-moving instructions (transfers/mints) in one \
@@ -138,7 +200,7 @@ fn detect_repeated_destination(report: &TransactionReport, flags: &mut Vec<RiskF
     }
 }
 
-fn detect_mint_authority_takeover(report: &TransactionReport, flags: &mut Vec<RiskFlag>) {
+fn detect_mint_authority_takeover(report: &TransactionReport, severity: RiskSeverity, flags: &mut Vec<RiskFlag>) {
     for set_ix in &report.instructions {
         if !is_token_program(&set_ix.program_id) {
             continue;
@@ -173,7 +235,7 @@ fn detect_mint_authority_takeover(report: &TransactionReport, flags: &mut Vec<Ri
                 continue;
             }
             flags.push(pattern_flag(
-                RiskSeverity::Warning,
+                severity.clone(),
                 set_ix.index,
                 format!(
                     "mint authority takeover: instruction #{} SetAuthority re-points the authority of mint {} \

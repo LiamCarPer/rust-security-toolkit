@@ -28,6 +28,7 @@ fn make_report_with_program(program_id: &str) -> TransactionReport {
         risk_flags: vec![],
         simulation: None,
         warnings: vec![],
+        signature_verification: vec![],
     }
 }
 

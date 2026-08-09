@@ -300,6 +300,7 @@ fn priority_fee_actual_crossref_e2e() {
         return_data: None,
         error_code: None,
         error_instruction_index: None,
+        instruction_cu: Vec::new(),
     });
 
     let flags = sim_crossref::cross_reference(&mut report);
@@ -333,6 +334,7 @@ fn cu_exceeded_crossref_e2e() {
         return_data: None,
         error_code: None,
         error_instruction_index: None,
+        instruction_cu: Vec::new(),
     });
 
     let flags = sim_crossref::cross_reference(&mut report);

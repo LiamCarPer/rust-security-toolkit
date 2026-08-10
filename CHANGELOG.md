@@ -29,6 +29,14 @@ All notable changes to this project are documented in this file.
   shapes; tests/attack_corpus.rs validates decode, signature verification,
   and flag expectations offline; a refresh test rescans recent blocks
 - **Fuzz targets + property tests**: libFuzzer targets for patterns,
+- **CPI-aware decoding**: --signature now parses getTransaction meta
+  (innerInstructions + loadedAddresses) into report.inner_instructions with
+  ALT-loaded account resolution, positional role names, and token amounts;
+  the pattern engine analyzes the flattened top-level + inner view with
+  parent-aware flags (same-lineage gating, no cross-parent false positives)
+- **getTransaction fetch fix**: mainnet returns result as an object with
+  transaction [base64, encoding] and meta at result.meta; the parser now
+  accepts the object shape (and the legacy array convention)
   sim_crossref, expectations_decoder, and signature_verify (fuzz crate),
   and proptest no-panic suites for the same surfaces in tests/properties.rs
 - **Native program expectations** (--expectations): consumes sat native expectations

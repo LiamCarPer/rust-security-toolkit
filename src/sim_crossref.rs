@@ -295,6 +295,7 @@ mod tests {
             simulation,
             warnings: vec![],
             signature_verification: vec![],
+            inner_instructions: vec![],
         }
     }
 

@@ -3,7 +3,9 @@ use clap::Parser;
 use std::path::PathBuf;
 
 use rust_security_toolkit::types::{ExpectationsDoc, IdlJson, ProgramSchema, RiskSeverity, TransactionReport};
-use rust_security_toolkit::{decoder, patterns, signature_verify, sim_crossref, simulator, ui, validator};
+use rust_security_toolkit::{
+    decoder, inner_instructions, patterns, signature_verify, sim_crossref, simulator, ui, validator,
+};
 
 #[derive(Parser)]
 #[command(
@@ -74,9 +76,12 @@ async fn main() -> Result<()> {
 
     // All input sources are read as bytes so raw binary transactions work
     // from stdin and --file; encoding detection applies to UTF-8 text.
+    let mut fetched_meta = None;
     let input_bytes: Vec<u8> = if let Some(ref sig) = cli.signature {
         let rpc_url = cli.rpc.as_ref().context("--signature requires --rpc")?;
-        simulator::fetch_transaction_by_signature(rpc_url, sig).await?
+        let (bytes, meta) = simulator::fetch_transaction_with_meta(rpc_url, sig).await?;
+        fetched_meta = meta;
+        bytes
     } else {
         match (cli.tx_input, &cli.file) {
             (Some(input), _) if input == "-" => {
@@ -128,6 +133,11 @@ async fn main() -> Result<()> {
 
     let (raw_bytes_decoded, mut report) = decoder::decode_input(&input_bytes, schema.as_ref())?;
     validator::validate(&mut report, schema.as_ref());
+
+    if let Some(meta) = fetched_meta {
+        let warnings = inner_instructions::annotate_report(&mut report, meta);
+        report.warnings.extend(warnings);
+    }
 
     match bincode::deserialize::<solana_sdk::transaction::VersionedTransaction>(&raw_bytes_decoded) {
         Ok(tx) => {
@@ -262,6 +272,7 @@ mod tests {
             simulation: None,
             warnings: Vec::new(),
             signature_verification: Vec::new(),
+            inner_instructions: Vec::new(),
         }
     }
 

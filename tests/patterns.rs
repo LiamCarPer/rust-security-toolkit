@@ -54,7 +54,38 @@ fn report(instructions: Vec<DecodedInstruction>) -> TransactionReport {
         simulation: None,
         warnings: Vec::new(),
         signature_verification: Vec::new(),
+        inner_instructions: Vec::new(),
     }
+}
+
+fn inner_instruction(
+    inner_index: u32,
+    parent_instruction_index: u8,
+    program_id: &str,
+    name: &str,
+    accounts: Vec<MappedAccount>,
+    data: serde_json::Value,
+) -> InnerInstruction {
+    InnerInstruction {
+        inner_index,
+        parent_instruction_index,
+        program_id: program_id.to_string(),
+        program_name: String::new(),
+        instruction_name: Some(name.to_string()),
+        accounts,
+        data,
+        raw_data_hex: String::new(),
+        token_amount: None,
+    }
+}
+
+fn report_with_inner(
+    instructions: Vec<DecodedInstruction>,
+    inner_instructions: Vec<InnerInstruction>,
+) -> TransactionReport {
+    let mut report = report(instructions);
+    report.inner_instructions = inner_instructions;
+    report
 }
 
 fn single_flag(flags: &[RiskFlag]) -> &RiskFlag {
@@ -463,4 +494,49 @@ fn non_mint_authority_type_change_is_not_flagged() {
         ),
     ]));
     assert!(flags.is_empty(), "unexpected flags: {:?}", flags);
+}
+
+#[test]
+fn inner_instructions_present_do_not_break_top_level_rules() {
+    let flags = detect_patterns(&report_with_inner(
+        vec![
+            instruction(
+                0,
+                TOKEN_PROGRAM_ID,
+                "Approve",
+                vec![
+                    named("SRC_A", "source", true),
+                    named(DELEGATE, "delegate", false),
+                    named(WALLET_A, "owner", true),
+                ],
+                serde_json::json!({"amount": 1000}),
+            ),
+            instruction(
+                1,
+                TOKEN_PROGRAM_ID,
+                "Transfer",
+                vec![
+                    named("SRC_B", "source", false),
+                    named(WALLET_B, "destination", false),
+                    named(DELEGATE, "authority", true),
+                ],
+                serde_json::json!({"amount": 1000}),
+            ),
+        ],
+        vec![inner_instruction(
+            0,
+            0,
+            SYSTEM_PROGRAM_ID,
+            "CreateAccount",
+            vec![named(WALLET_A, "from", true), named("NewAcct11111111111111111111111111111", "to", false)],
+            serde_json::json!({"lamports": 1000, "space": 100}),
+        )],
+    ));
+    let flag = single_flag(&flags);
+    assert_eq!(flag.severity, RiskSeverity::Warning);
+    assert_eq!(flag.category, RiskCategory::PatternDetection);
+    assert_eq!(flag.instruction_index, Some(1));
+    assert!(flag.message.contains("Approve"), "message: {}", flag.message);
+    assert!(flag.message.contains(DELEGATE), "message: {}", flag.message);
+    assert!(!flag.message.contains("inner #"), "message: {}", flag.message);
 }

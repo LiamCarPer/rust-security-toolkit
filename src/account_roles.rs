@@ -1,12 +1,28 @@
 //! Static positional account-role annotation for well-known Solana programs.
 
 use crate::types::{
-    ASSOCIATED_TOKEN_PROGRAM_ID, DecodedInstruction, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID, DecodedInstruction, InnerInstruction, SYSTEM_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
+    TOKEN_PROGRAM_ID,
 };
 
 /// Fill `MappedAccount.name` for instructions from well-known programs using a
 /// static positional role table. Only sets names that are still `None`.
 pub fn annotate_known_program_roles(instructions: &mut [DecodedInstruction]) {
+    for ix in instructions {
+        let Some(instruction_name) = ix.instruction_name.as_deref() else {
+            continue;
+        };
+        for (position, mapped) in ix.accounts.iter_mut().enumerate() {
+            if mapped.name.is_none()
+                && let Some(role) = known_program_role(&ix.program_id, instruction_name, position)
+            {
+                mapped.name = Some(role.to_string());
+            }
+        }
+    }
+}
+
+pub fn annotate_inner_instruction_roles(instructions: &mut [InnerInstruction]) {
     for ix in instructions {
         let Some(instruction_name) = ix.instruction_name.as_deref() else {
             continue;

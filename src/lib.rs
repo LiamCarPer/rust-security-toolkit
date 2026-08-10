@@ -3,6 +3,7 @@ pub mod anchor_decoder;
 pub mod decoder;
 pub mod encoding;
 pub mod expectations_decoder;
+pub mod inner_instructions;
 pub mod instruction_decoder;
 pub mod internal_parser;
 pub mod patterns;

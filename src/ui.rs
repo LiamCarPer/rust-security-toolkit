@@ -159,6 +159,41 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
     }
     println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
 
+    // ── Inner Instructions (CPI, from RPC meta) ─────────────────────────────
+    if !report.inner_instructions.is_empty() {
+        println!();
+        println!("{}", "┌── Inner Instructions (CPI, from RPC meta) ───────────────────────────────────────┐".bold());
+        for inner in &report.inner_instructions {
+            let name = inner.instruction_name.as_deref().unwrap_or(&inner.program_name);
+            println!(
+                "│ Instruction #{} (inner #{}): {}",
+                inner.parent_instruction_index,
+                inner.inner_index,
+                name.cyan()
+            );
+            println!("│   ├── Program: {}", inner.program_id.dimmed());
+            for account in &inner.accounts {
+                let label = account.name.as_deref().unwrap_or("account");
+                println!(
+                    "│   │   ├── {:<12}: {:<15} (Account #{})",
+                    format!("{}:", label),
+                    truncate_key(&account.pubkey),
+                    account.account_index
+                );
+            }
+            if inner.data != serde_json::Value::Null {
+                let data_str = serde_json::to_string(&inner.data).unwrap_or_else(|_| inner.raw_data_hex.clone());
+                println!("│   └── Mapped Data: {}", data_str.dimmed());
+            } else if !inner.raw_data_hex.is_empty() {
+                println!("│   └── Raw Data: {}", inner.raw_data_hex.dimmed());
+            }
+            if let Some(ta) = &inner.token_amount {
+                println!("│   └── Token Amount: {} (raw {}, {} decimals)", ta.human, ta.raw, ta.decimals);
+            }
+        }
+        println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
+    }
+
     // ── Per-Instruction Compute Units ───────────────────────────────────────
     if let Some(ref sim) = report.simulation
         && !sim.instruction_cu.is_empty()

@@ -815,6 +815,7 @@ mod tests {
             simulation: None,
             warnings: vec![],
             signature_verification: vec![],
+            inner_instructions: vec![],
         };
 
         let mut flags = Vec::new();
@@ -846,6 +847,7 @@ mod tests {
             simulation: None,
             warnings: vec![],
             signature_verification: vec![],
+            inner_instructions: vec![],
         };
 
         let mut flags = Vec::new();
@@ -886,6 +888,7 @@ mod tests {
             simulation: None,
             warnings: vec![],
             signature_verification: vec![],
+            inner_instructions: vec![],
         };
 
         validate(&mut report, None);
@@ -975,6 +978,7 @@ mod tests {
             simulation: None,
             warnings: vec![],
             signature_verification: vec![],
+            inner_instructions: vec![],
         }
     }
 

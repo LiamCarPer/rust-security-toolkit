@@ -4,9 +4,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
-    ADDRESS_LOOKUP_TABLE_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, DecodedInstruction,
-    RiskCategory, RiskFlag, RiskSeverity, SYSTEM_PROGRAM_ID, SimulationResult, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID,
-    TokenAmount, TransactionReport,
+    ADDRESS_LOOKUP_TABLE_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, FetchedTxMeta,
+    MappedAccount, RiskCategory, RiskFlag, RiskSeverity, SYSTEM_PROGRAM_ID, SimulationResult, TOKEN_2022_PROGRAM_ID,
+    TOKEN_PROGRAM_ID, TokenAmount, TransactionReport,
 };
 
 const BPF_LOADER_UPGRADEABLE: &str = "BPFLoaderUpgradeab1e11111111111111111111111";
@@ -193,7 +193,7 @@ struct RpcGetTransactionResponse {
     error: Option<RpcError>,
 }
 
-pub async fn fetch_transaction_by_signature(rpc_url: &str, signature: &str) -> Result<Vec<u8>> {
+pub async fn fetch_transaction_with_meta(rpc_url: &str, signature: &str) -> Result<(Vec<u8>, Option<FetchedTxMeta>)> {
     let client = reqwest::Client::new();
 
     let request = RpcGetTransactionRequest {
@@ -227,8 +227,15 @@ pub async fn fetch_transaction_by_signature(rpc_url: &str, signature: &str) -> R
 
     let result = body.result.ok_or_else(|| anyhow::anyhow!("Transaction {} not found", signature))?;
 
-    let parts =
-        result.as_array().ok_or_else(|| anyhow::anyhow!("malformed getTransaction result: expected an array"))?;
+    // Mainnet getTransaction returns `result` as an object with a
+    // `transaction` field (`[base64, encoding]`) and the meta at
+    // `result.meta`; some endpoints return the bare `[base64, meta]`
+    // array convention instead. Accept both.
+    let parts = result
+        .as_array()
+        .map(|a| a.as_slice())
+        .or_else(|| result.get("transaction").and_then(|t| t.as_array()).map(|a| a.as_slice()))
+        .ok_or_else(|| anyhow::anyhow!("malformed getTransaction result: expected an array or a transaction field"))?;
 
     let encoded = parts
         .first()
@@ -236,9 +243,20 @@ pub async fn fetch_transaction_by_signature(rpc_url: &str, signature: &str) -> R
         .ok_or_else(|| anyhow::anyhow!("malformed getTransaction result: missing base64 transaction"))?;
 
     use base64::Engine;
-    base64::engine::general_purpose::STANDARD
+    let raw = base64::engine::general_purpose::STANDARD
         .decode(encoded)
-        .with_context(|| format!("transaction data for signature {} is not valid base64", signature))
+        .with_context(|| format!("transaction data for signature {} is not valid base64", signature))?;
+
+    let meta = result
+        .get("meta")
+        .and_then(|m| serde_json::from_value::<FetchedTxMeta>(m.clone()).ok())
+        .or_else(|| parts.get(1).and_then(|m| serde_json::from_value::<FetchedTxMeta>(m.clone()).ok()));
+
+    Ok((raw, meta))
+}
+
+pub async fn fetch_transaction_by_signature(rpc_url: &str, signature: &str) -> Result<Vec<u8>> {
+    Ok(fetch_transaction_with_meta(rpc_url, signature).await?.0)
 }
 
 // ── Address Lookup Table Resolution ─────────────────────────────────────────
@@ -695,52 +713,87 @@ pub async fn resolve_token_amounts(rpc_url: Option<&str>, report: &mut Transacti
     let mut decimals_cache: HashMap<String, Option<u8>> = HashMap::new();
 
     for ix in &mut report.instructions {
-        if ix.program_id != TOKEN_PROGRAM_ID && ix.program_id != TOKEN_2022_PROGRAM_ID {
-            continue;
-        }
-        let Some(name) = ix.instruction_name.clone() else { continue };
-        if !matches!(
-            name.as_str(),
-            "Transfer"
-                | "TransferChecked"
-                | "Approve"
-                | "ApproveChecked"
-                | "MintTo"
-                | "MintToChecked"
-                | "Burn"
-                | "BurnChecked"
-                | "AmountToUiAmount"
-        ) {
-            continue;
-        }
-        // Skip instructions without an `amount` payload entirely.
-        let Some(amount) = ix.data.get("amount").and_then(serde_json::Value::as_u64) else { continue };
+        let mut target = TokenAmountTarget {
+            program_id: &ix.program_id,
+            instruction_name: ix.instruction_name.clone(),
+            accounts: &ix.accounts,
+            data: &ix.data,
+            token_amount: &mut ix.token_amount,
+        };
+        resolve_instruction_token_amount(&client, rpc_url, &mut target, &mut decimals_cache).await;
+    }
 
-        // Checked variants carry decimals inline — resolved offline, no RPC.
-        if resolve_inline_decimals(ix).is_some() {
-            continue;
-        }
+    for ix in &mut report.inner_instructions {
+        let mut target = TokenAmountTarget {
+            program_id: &ix.program_id,
+            instruction_name: ix.instruction_name.clone(),
+            accounts: &ix.accounts,
+            data: &ix.data,
+            token_amount: &mut ix.token_amount,
+        };
+        resolve_instruction_token_amount(&client, rpc_url, &mut target, &mut decimals_cache).await;
+    }
+}
 
-        // Unchecked variants need decimals from the mint, or from the source
-        // token account for Transfer/Approve, via jsonParsed getAccountInfo.
-        let Some(rpc_url) = rpc_url else { continue };
-        let Some(position) = mint_source_position(&name) else { continue };
-        let Some(pubkey) = ix.accounts.get(position).map(|a| a.pubkey.as_str()) else { continue };
+struct TokenAmountTarget<'a> {
+    program_id: &'a str,
+    instruction_name: Option<String>,
+    accounts: &'a [MappedAccount],
+    data: &'a serde_json::Value,
+    token_amount: &'a mut Option<TokenAmount>,
+}
 
-        let is_mint = !matches!(name.as_str(), "Transfer" | "Approve");
-        if let Some(decimals) = fetch_parsed_decimals(&client, rpc_url, pubkey, is_mint, &mut decimals_cache).await {
-            ix.token_amount = Some(TokenAmount { raw: amount, decimals, human: format_ui_amount(amount, decimals) });
-        }
+async fn resolve_instruction_token_amount(
+    client: &reqwest::Client,
+    rpc_url: Option<&str>,
+    target: &mut TokenAmountTarget<'_>,
+    decimals_cache: &mut HashMap<String, Option<u8>>,
+) {
+    if target.program_id != TOKEN_PROGRAM_ID && target.program_id != TOKEN_2022_PROGRAM_ID {
+        return;
+    }
+    let Some(name) = target.instruction_name.clone() else { return };
+    if !matches!(
+        name.as_str(),
+        "Transfer"
+            | "TransferChecked"
+            | "Approve"
+            | "ApproveChecked"
+            | "MintTo"
+            | "MintToChecked"
+            | "Burn"
+            | "BurnChecked"
+            | "AmountToUiAmount"
+    ) {
+        return;
+    }
+    // Skip instructions without an `amount` payload entirely.
+    let Some(amount) = target.data.get("amount").and_then(serde_json::Value::as_u64) else { return };
+
+    // Checked variants carry decimals inline — resolved offline, no RPC.
+    if resolve_inline_decimals(target.data, target.token_amount).is_some() {
+        return;
+    }
+
+    // Unchecked variants need decimals from the mint, or from the source
+    // token account for Transfer/Approve, via jsonParsed getAccountInfo.
+    let Some(rpc_url) = rpc_url else { return };
+    let Some(position) = mint_source_position(&name) else { return };
+    let Some(pubkey) = target.accounts.get(position).map(|a| a.pubkey.as_str()) else { return };
+
+    let is_mint = !matches!(name.as_str(), "Transfer" | "Approve");
+    if let Some(decimals) = fetch_parsed_decimals(client, rpc_url, pubkey, is_mint, decimals_cache).await {
+        *target.token_amount = Some(TokenAmount { raw: amount, decimals, human: format_ui_amount(amount, decimals) });
     }
 }
 
 /// Resolve amount + decimals purely from instruction data (checked variants
 /// carry both fields inline). Sets `token_amount` and returns the decimals,
 /// or None when either field is missing or `token_amount` is left unset.
-fn resolve_inline_decimals(ix: &mut DecodedInstruction) -> Option<u8> {
-    let amount = ix.data.get("amount").and_then(serde_json::Value::as_u64)?;
-    let decimals = ix.data.get("decimals").and_then(serde_json::Value::as_u64)? as u8;
-    ix.token_amount = Some(TokenAmount { raw: amount, decimals, human: format_ui_amount(amount, decimals) });
+fn resolve_inline_decimals(data: &serde_json::Value, token_amount: &mut Option<TokenAmount>) -> Option<u8> {
+    let amount = data.get("amount").and_then(serde_json::Value::as_u64)?;
+    let decimals = data.get("decimals").and_then(serde_json::Value::as_u64)? as u8;
+    *token_amount = Some(TokenAmount { raw: amount, decimals, human: format_ui_amount(amount, decimals) });
     Some(decimals)
 }
 
@@ -902,6 +955,7 @@ async fn check_verified_build(registry_url: &str, program_id: &str) -> Result<bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::DecodedInstruction;
 
     #[test]
     fn format_ui_amount_cases() {
@@ -965,7 +1019,7 @@ mod tests {
             token_amount: None,
         };
 
-        assert_eq!(resolve_inline_decimals(&mut ix), Some(6));
+        assert_eq!(resolve_inline_decimals(&ix.data, &mut ix.token_amount), Some(6));
         let token_amount = ix.token_amount.expect("token_amount should be set");
         assert_eq!(token_amount.raw, 1_500_000);
         assert_eq!(token_amount.decimals, 6);
@@ -986,7 +1040,7 @@ mod tests {
         };
 
         // Unchecked variant without inline decimals — nothing to resolve offline.
-        assert_eq!(resolve_inline_decimals(&mut ix), None);
+        assert_eq!(resolve_inline_decimals(&ix.data, &mut ix.token_amount), None);
         assert!(ix.token_amount.is_none());
     }
 }

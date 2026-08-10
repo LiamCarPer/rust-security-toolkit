@@ -29,6 +29,7 @@ fn make_report_with_program(program_id: &str) -> TransactionReport {
         simulation: None,
         warnings: vec![],
         signature_verification: vec![],
+        inner_instructions: vec![],
     }
 }
 

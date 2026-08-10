@@ -50,6 +50,7 @@ fn report(instructions: Vec<DecodedInstruction>) -> TransactionReport {
         simulation: None,
         warnings: Vec::new(),
         signature_verification: Vec::new(),
+        inner_instructions: Vec::new(),
     }
 }
 

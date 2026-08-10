@@ -25,6 +25,11 @@ pub struct TransactionReport {
     /// signatures; populated whenever the transaction carries signatures.
     #[serde(default)]
     pub signature_verification: Vec<SignatureCheck>,
+    /// Instructions invoked via CPI (`meta.innerInstructions`), present only
+    /// when the transaction was fetched by signature with RPC meta. Account
+    /// indices refer to the full message key list (static + ALT-loaded).
+    #[serde(default)]
+    pub inner_instructions: Vec<InnerInstruction>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +38,61 @@ pub struct SignatureCheck {
     pub pubkey: String,
     pub verified: bool,
     pub note: String,
+}
+
+/// A CPI-invoked instruction decoded from `getTransaction` meta.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InnerInstruction {
+    /// Position within the parent's inner instruction list.
+    pub inner_index: u32,
+    /// Index of the top-level instruction that invoked this CPI.
+    pub parent_instruction_index: u8,
+    pub program_id: String,
+    pub program_name: String,
+    pub instruction_name: Option<String>,
+    pub accounts: Vec<MappedAccount>,
+    pub data: serde_json::Value,
+    pub raw_data_hex: String,
+    #[serde(default)]
+    pub token_amount: Option<TokenAmount>,
+}
+
+/// Raw `getTransaction` meta, parsed by the simulator and consumed by the
+/// inner-instruction annotator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchedTxMeta {
+    #[serde(default)]
+    pub inner_instructions: Vec<TxMetaInnerInstructions>,
+    #[serde(default)]
+    pub loaded_addresses: Option<FetchedTxLoadedAddresses>,
+    pub error: Option<serde_json::Value>,
+    #[serde(default)]
+    pub units_consumed: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchedTxLoadedAddresses {
+    pub writable: Vec<String>,
+    pub readonly: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TxMetaInnerInstructions {
+    /// Index of the top-level instruction that invoked the CPIs.
+    pub index: u8,
+    #[serde(default)]
+    pub instructions: Vec<TxMetaRawInnerInstruction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TxMetaRawInnerInstruction {
+    pub program_id_index: u8,
+    #[serde(default)]
+    pub accounts: Vec<u8>,
+    pub data: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -130,6 +130,7 @@ mod tests {
             simulation: None,
             warnings: Vec::new(),
             signature_verification: checks,
+            inner_instructions: Vec::new(),
         }
     }
 

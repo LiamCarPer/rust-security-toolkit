@@ -153,6 +153,7 @@ fn make_report() -> TransactionReport {
         simulation: None,
         warnings: vec![],
         signature_verification: vec![],
+        inner_instructions: vec![],
     }
 }
 
@@ -404,6 +405,7 @@ fn make_report_with_data() -> TransactionReport {
         simulation: None,
         warnings: vec![],
         signature_verification: vec![],
+        inner_instructions: vec![],
     }
 }
 

@@ -282,6 +282,7 @@ fn decode_versioned_tx(tx: VersionedTransaction, schema: Option<&ProgramSchema>)
         simulation: None,
         warnings: Vec::new(),
         signature_verification: Vec::new(),
+        inner_instructions: Vec::new(),
     })
 }
 

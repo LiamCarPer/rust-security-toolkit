@@ -6,7 +6,7 @@ use crate::types::{
     TOKEN_PROGRAM_ID, TransactionReport,
 };
 
-pub fn annotate_report(report: &mut TransactionReport, meta: FetchedTxMeta) -> Vec<String> {
+pub(crate) fn full_key_list(report: &TransactionReport, meta: &FetchedTxMeta) -> Vec<String> {
     let mut statics: Vec<&AccountInfo> = report.accounts.iter().collect();
     statics.sort_by_key(|a| a.index);
 
@@ -19,6 +19,19 @@ pub fn annotate_report(report: &mut TransactionReport, meta: FetchedTxMeta) -> V
     full_keys.extend(loaded_writable.iter().cloned());
     full_keys.extend(loaded_readonly.iter().cloned());
 
+    full_keys
+}
+
+pub fn annotate_report(report: &mut TransactionReport, meta: FetchedTxMeta) -> Vec<String> {
+    let mut statics: Vec<&AccountInfo> = report.accounts.iter().collect();
+    statics.sort_by_key(|a| a.index);
+
+    let full_keys = full_key_list(report, &meta);
+
+    let (loaded_writable, loaded_readonly) = match &meta.loaded_addresses {
+        Some(loaded) => (loaded.writable.clone(), loaded.readonly.clone()),
+        None => (Vec::new(), Vec::new()),
+    };
     let static_len = full_keys.len() - loaded_writable.len() - loaded_readonly.len();
 
     let mut warnings = Vec::new();
@@ -138,6 +151,8 @@ mod tests {
             warnings: Vec::new(),
             signature_verification: Vec::new(),
             inner_instructions: Vec::new(),
+            balance_changes_sol: Vec::new(),
+            token_balance_changes: Vec::new(),
         }
     }
 
@@ -172,7 +187,16 @@ mod tests {
         groups: Vec<TxMetaInnerInstructions>,
         loaded: Option<FetchedTxLoadedAddresses>,
     ) -> FetchedTxMeta {
-        FetchedTxMeta { inner_instructions: groups, loaded_addresses: loaded, error: None, units_consumed: None }
+        FetchedTxMeta {
+            inner_instructions: groups,
+            loaded_addresses: loaded,
+            error: None,
+            units_consumed: None,
+            pre_balances: Vec::new(),
+            post_balances: Vec::new(),
+            pre_token_balances: Vec::new(),
+            post_token_balances: Vec::new(),
+        }
     }
 
     #[test]

@@ -868,7 +868,7 @@ fn decimals_from_token_amount(data: &serde_json::Value) -> Option<u8> {
 /// Format raw units with `decimals` decimal places, trimming trailing zeros.
 /// Examples: (1_500_000, 6) -> "1.5"; (1_000_000, 6) -> "1"; (123_456, 2) -> "1234.56";
 /// (1, 6) -> "0.000001"; (0, 6) -> "0"; (99, 0) -> "99".
-fn format_ui_amount(raw: u64, decimals: u8) -> String {
+pub(crate) fn format_ui_amount(raw: u64, decimals: u8) -> String {
     // 10^19 overflows u64 — such mints don't exist in practice.
     if decimals == 0 || decimals >= 19 {
         return raw.to_string();

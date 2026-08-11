@@ -183,6 +183,8 @@ async fn resolve_token_amounts_resolves_inner_checked() {
             raw_data_hex: String::new(),
             token_amount: None,
         }],
+        balance_changes_sol: vec![],
+        token_balance_changes: vec![],
     };
 
     resolve_token_amounts(None, &mut report).await;

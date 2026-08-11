@@ -11,6 +11,7 @@ use rust_security_toolkit::signature_verify::verify_report;
 use rust_security_toolkit::signature_verify::verify_transaction;
 use rust_security_toolkit::sim_crossref::cross_reference;
 use rust_security_toolkit::types::ExpectationsDoc;
+use rust_security_toolkit::types::FetchedTxMeta;
 use rust_security_toolkit::types::IdlArg;
 use rust_security_toolkit::types::PatternConfig;
 use rust_security_toolkit::types::PatternRuleOverride;
@@ -197,6 +198,24 @@ fn expectations_doc() -> ExpectationsDoc {
     serde_json::from_str(&raw).expect("expectations fixture must parse")
 }
 
+fn minimal_report() -> TransactionReport {
+    serde_json::from_value(serde_json::json!({
+        "status": "ok",
+        "fee_payer": "",
+        "signatures": [],
+        "recent_blockhash": "",
+        "message_version": null,
+        "accounts": [],
+        "instructions": [],
+        "address_lookup_tables": [],
+        "compute_budget": null,
+        "risk_flags": [],
+        "simulation": null,
+        "warnings": []
+    }))
+    .expect("minimal report must deserialize")
+}
+
 proptest! {
     /// Arbitrary bytes must never panic the canonical decode paths.
     #[test]
@@ -326,5 +345,16 @@ proptest! {
             serde_json::from_value(serde_json::to_value(&config).expect("config serializes"))
                 .expect("config round-trips");
         let _ = detect_patterns_with_config(&report, &round_tripped);
+    }
+
+    /// Arbitrary getTransaction meta must never panic the balance annotator.
+    #[test]
+    fn no_panic_balance_annotation_any_meta(bytes in prop::collection::vec(any::<u8>(), 0..2048)) {
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            && let Ok(meta) = serde_json::from_value::<FetchedTxMeta>(value)
+        {
+            let mut report = minimal_report();
+            let _ = rust_security_toolkit::balance_changes::annotate_report(&mut report, meta);
+        }
     }
 }

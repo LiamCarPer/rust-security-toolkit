@@ -30,6 +30,14 @@ pub struct TransactionReport {
     /// indices refer to the full message key list (static + ALT-loaded).
     #[serde(default)]
     pub inner_instructions: Vec<InnerInstruction>,
+    /// SOL lamport deltas from meta pre/postBalances; only accounts whose
+    /// balance changed are listed.
+    #[serde(default)]
+    pub balance_changes_sol: Vec<SolBalanceChange>,
+    /// Token deltas from meta pre/postTokenBalances; only (account, mint)
+    /// pairs whose balance changed are listed.
+    #[serde(default)]
+    pub token_balance_changes: Vec<TokenBalanceChange>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +66,7 @@ pub struct InnerInstruction {
 }
 
 /// Raw `getTransaction` meta, parsed by the simulator and consumed by the
-/// inner-instruction annotator.
+/// inner-instruction and balance annotators.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FetchedTxMeta {
@@ -69,6 +77,56 @@ pub struct FetchedTxMeta {
     pub error: Option<serde_json::Value>,
     #[serde(default)]
     pub units_consumed: Option<u64>,
+    #[serde(default)]
+    pub pre_balances: Vec<u64>,
+    #[serde(default)]
+    pub post_balances: Vec<u64>,
+    #[serde(default)]
+    pub pre_token_balances: Vec<TokenBalanceDto>,
+    #[serde(default)]
+    pub post_token_balances: Vec<TokenBalanceDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenBalanceDto {
+    pub account_index: u8,
+    pub mint: String,
+    pub ui_token_amount: UiTokenAmountDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiTokenAmountDto {
+    /// Raw token units as a string (may exceed u64).
+    pub amount: String,
+    pub decimals: u8,
+    pub ui_amount: Option<f64>,
+    pub ui_amount_string: Option<String>,
+}
+
+/// SOL lamport balance change for one message account (meta pre/postBalances).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SolBalanceChange {
+    pub account_index: u8,
+    pub pubkey: String,
+    pub pre: u64,
+    pub post: u64,
+    pub delta: i64,
+}
+
+/// Token balance change for one (account, mint) pair (meta pre/postTokenBalances).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenBalanceChange {
+    pub account_index: u8,
+    pub pubkey: String,
+    pub mint: String,
+    pub pre: Option<TokenAmount>,
+    pub post: Option<TokenAmount>,
+    /// Signed raw-unit delta; token amounts may exceed u64 so this is i128.
+    pub delta_raw: i128,
+    /// Sign-aware human rendering of the delta (e.g. "-1.5").
+    pub delta_human: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

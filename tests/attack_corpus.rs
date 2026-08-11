@@ -1,8 +1,12 @@
 use base64::Engine;
 use rust_security_toolkit::decoder;
+use rust_security_toolkit::inner_instructions;
 use rust_security_toolkit::patterns;
 use rust_security_toolkit::signature_verify;
-use rust_security_toolkit::types::{RiskCategory, RiskFlag, RiskSeverity};
+use rust_security_toolkit::types::{
+    FetchedTxLoadedAddresses, FetchedTxMeta, RiskCategory, RiskFlag, RiskSeverity, TxMetaInnerInstructions,
+    TxMetaRawInnerInstruction,
+};
 use rust_security_toolkit::validator;
 use serde::{Deserialize, Serialize};
 use solana_client::rpc_client::RpcClient;
@@ -15,7 +19,8 @@ use solana_sdk::signature::{Keypair, Signature};
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::VersionedTransaction;
 use solana_transaction_status_client_types::{
-    EncodedTransaction, TransactionBinaryEncoding, TransactionDetails, UiTransactionEncoding,
+    EncodedTransaction, TransactionBinaryEncoding, TransactionDetails, UiInnerInstructions, UiInstruction,
+    UiLoadedAddresses, UiTransactionEncoding, UiTransactionError, UiTransactionStatusMeta,
 };
 use std::str::FromStr;
 use std::time::Duration;
@@ -35,6 +40,10 @@ struct ManifestEntry {
     expected_categories: Vec<String>,
     expected_min_flags: usize,
     notes: String,
+    #[serde(default)]
+    failed: bool,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -44,6 +53,9 @@ struct Candidate {
     rules: Vec<String>,
     notes: String,
     source: &'static str,
+    failed: bool,
+    error: Option<String>,
+    meta: FetchedTxMeta,
 }
 
 #[test]
@@ -124,15 +136,24 @@ fn fetch_attack_corpus() {
             let file = format!("{idx:02}.b64");
             let bytes = base64::engine::general_purpose::STANDARD.decode(&candidate.base64).expect("fixture base64");
             let (_, mut report) = decoder::decode_input(&bytes, None).expect("fixture decode");
+            inner_instructions::annotate_report(&mut report, candidate.meta.clone());
             validator::validate(&mut report, None);
             let flags = patterns::detect_patterns(&report);
+            let pattern_fired = flags.iter().any(|f| rule_name(f).is_some());
+            let (expected_categories, expected_min_flags) = if candidate.failed && !pattern_fired {
+                (Vec::new(), 0)
+            } else {
+                (vec!["pattern_detection".to_string()], flags.len())
+            };
             ManifestEntry {
                 file,
                 signature: candidate.signature.clone(),
                 source: candidate.source.to_string(),
-                expected_categories: vec!["pattern_detection".to_string()],
-                expected_min_flags: flags.len(),
+                expected_categories,
+                expected_min_flags,
                 notes: candidate.notes.clone(),
+                failed: candidate.failed,
+                error: candidate.error.clone(),
             }
         })
         .collect();
@@ -217,6 +238,7 @@ fn scan_block(rpc: &RpcClient, slot: u64, candidates: &mut Vec<Candidate>) {
     let mut decoded_ok = 0usize;
     let mut flagged = 0usize;
     let mut kept = 0usize;
+    let mut kept_failed = 0usize;
     let total_txs = block.transactions.as_ref().map_or(0, Vec::len);
 
     for tx_with_meta in block.transactions.unwrap_or_default() {
@@ -225,8 +247,9 @@ fn scan_block(rpc: &RpcClient, slot: u64, candidates: &mut Vec<Candidate>) {
         }
         let Some(meta) = tx_with_meta.meta else { continue };
         with_meta += 1;
-        let logs: Vec<String> = meta.log_messages.unwrap_or_else(Vec::new);
-        if meta.err.is_some() {
+        let UiTransactionStatusMeta { err, log_messages, inner_instructions, loaded_addresses, .. } = meta;
+        let logs: Vec<String> = log_messages.unwrap_or_else(Vec::new);
+        if err.is_some() {
             err_txs += 1;
             if !logs.is_empty() {
                 err_with_logs += 1;
@@ -250,14 +273,31 @@ fn scan_block(rpc: &RpcClient, slot: u64, candidates: &mut Vec<Candidate>) {
             let pat = patterns::detect_patterns(&report);
             eprintln!("  debug slot {slot} names={names:?} flags={} fee_payer={}", pat.len(), report.fee_payer);
         }
-        let Some(candidate) = classify(&bytes, "mainnet") else { continue };
+        let inner_groups: Vec<UiInnerInstructions> = Option::from(inner_instructions).unwrap_or_default();
+        let loaded: Option<UiLoadedAddresses> = Option::from(loaded_addresses);
+        let fetched_meta = build_fetched_meta(&inner_groups, loaded.as_ref());
+        let Some(candidate) = classify(&bytes, "mainnet", &fetched_meta) else {
+            if let Some(tx_err) = err.as_ref()
+                && kept_failed < 2
+                && let Some(candidate) = failed_candidate(&bytes, &fetched_meta, tx_err)
+            {
+                kept_failed += 1;
+                kept += 1;
+                eprintln!(
+                    "  slot {} kept failed tx #{}: {} error={}",
+                    slot, kept, candidate.signature, candidate.notes
+                );
+                candidates.push(candidate);
+            }
+            continue;
+        };
         flagged += 1;
         kept += 1;
         eprintln!("  slot {} kept tx #{}: {} rules={:?}", slot, kept, candidate.signature, candidate.rules);
         candidates.push(candidate);
     }
     eprintln!(
-        "  slot {slot}: txs={total_txs} meta={with_meta} logs={with_logs} err={err_txs} err_logs={err_with_logs} token={token_logs} decoded={decoded_ok} flagged={flagged} kept={kept}"
+        "  slot {slot}: txs={total_txs} meta={with_meta} logs={with_logs} err={err_txs} err_logs={err_with_logs} token={token_logs} decoded={decoded_ok} flagged={flagged} kept={kept} kept_failed={kept_failed}"
     );
 }
 
@@ -276,8 +316,9 @@ fn encoded_base64(enc: &EncodedTransaction) -> Option<String> {
     }
 }
 
-fn classify(bytes: &[u8], source: &'static str) -> Option<Candidate> {
+fn classify(bytes: &[u8], source: &'static str, meta: &FetchedTxMeta) -> Option<Candidate> {
     let (_, mut report) = decoder::decode_input(bytes, None).ok()?;
+    inner_instructions::annotate_report(&mut report, meta.clone());
     validator::validate(&mut report, None);
     let flags = patterns::detect_patterns(&report);
     if !flags.iter().any(|f| f.severity == RiskSeverity::Warning) {
@@ -302,7 +343,90 @@ fn classify(bytes: &[u8], source: &'static str) -> Option<Candidate> {
         rules,
         notes: note_parts.join("; "),
         source,
+        failed: false,
+        error: None,
+        meta: meta.clone(),
     })
+}
+
+fn empty_meta() -> FetchedTxMeta {
+    FetchedTxMeta {
+        inner_instructions: Vec::new(),
+        loaded_addresses: None,
+        error: None,
+        units_consumed: None,
+        pre_balances: Vec::new(),
+        post_balances: Vec::new(),
+        pre_token_balances: Vec::new(),
+        post_token_balances: Vec::new(),
+    }
+}
+
+fn build_fetched_meta(inner_groups: &[UiInnerInstructions], loaded: Option<&UiLoadedAddresses>) -> FetchedTxMeta {
+    FetchedTxMeta {
+        inner_instructions: inner_groups
+            .iter()
+            .map(|group| TxMetaInnerInstructions {
+                index: group.index,
+                instructions: group
+                    .instructions
+                    .iter()
+                    .filter_map(|instruction| match instruction {
+                        UiInstruction::Compiled(compiled) => Some(TxMetaRawInnerInstruction {
+                            program_id_index: compiled.program_id_index,
+                            accounts: compiled.accounts.clone(),
+                            data: compiled.data.clone(),
+                        }),
+                        UiInstruction::Parsed(_) => None,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        loaded_addresses: loaded.map(|addresses| FetchedTxLoadedAddresses {
+            writable: addresses.writable.clone(),
+            readonly: addresses.readonly.clone(),
+        }),
+        error: None,
+        units_consumed: None,
+        pre_balances: Vec::new(),
+        post_balances: Vec::new(),
+        pre_token_balances: Vec::new(),
+        post_token_balances: Vec::new(),
+    }
+}
+
+fn failed_candidate(bytes: &[u8], meta: &FetchedTxMeta, err: &UiTransactionError) -> Option<Candidate> {
+    let (_, mut report) = decoder::decode_input(bytes, None).ok()?;
+    inner_instructions::annotate_report(&mut report, meta.clone());
+    validator::validate(&mut report, None);
+    patterns::detect_patterns(&report);
+    let signature = report.signatures.first().cloned()?;
+    let error = compact_error(err);
+    Some(Candidate {
+        base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        signature,
+        rules: vec!["failed".to_string()],
+        notes: error.clone(),
+        source: "mainnet",
+        failed: true,
+        error: Some(error),
+        meta: meta.clone(),
+    })
+}
+
+fn compact_error(err: &UiTransactionError) -> String {
+    let value = serde_json::to_value(err).unwrap_or(serde_json::Value::Null);
+    let rendered = match value.as_object().and_then(|obj| obj.get("InstructionError")).and_then(|v| v.as_array()) {
+        Some(pair) if pair.len() >= 2 => format!("InstructionError({},{})", pair[0], pair[1]),
+        _ => value.to_string(),
+    };
+    if rendered.len() <= 80 {
+        rendered
+    } else {
+        let mut truncated: String = rendered.chars().take(77).collect();
+        truncated.push_str("...");
+        truncated
+    }
 }
 
 fn rule_name(flag: &RiskFlag) -> Option<&'static str> {
@@ -441,7 +565,7 @@ fn build_synthetic_fixtures() -> Vec<Candidate> {
         .into_iter()
         .map(|(_, instructions, payer, extra)| {
             let bytes = build_legacy(&instructions, payer, &extra);
-            classify(&bytes, "synthetic").expect("synthetic fixture must classify as attack-shaped")
+            classify(&bytes, "synthetic", &empty_meta()).expect("synthetic fixture must classify as attack-shaped")
         })
         .collect()
 }
@@ -535,6 +659,9 @@ fn manifest_is_valid_json() {
             entry.file,
             entry.source
         );
+        if entry.failed {
+            assert!(entry.error.is_some(), "{}: failed entry missing error", entry.file);
+        }
         if entry.expected_min_flags == 0 {
             assert!(
                 entry.expected_categories.is_empty(),
@@ -583,6 +710,7 @@ fn corpus_triggers_expected_flags() {
         let b64 = read_fixture(&entry.file);
         let (_, mut report) = decoder::decode_input(b64.trim().as_bytes(), None)
             .unwrap_or_else(|e| panic!("{}: decode failed: {}", entry.file, e));
+        inner_instructions::annotate_report(&mut report, empty_meta());
         validator::validate(&mut report, None);
         let flags = patterns::detect_patterns(&report);
         report.risk_flags.extend(flags);
@@ -629,6 +757,7 @@ fn real_fixtures_exercise_full_pipeline() {
             .unwrap_or_else(|e| panic!("{}: invalid base64: {}", entry.file, e));
         let (_, mut report) =
             decoder::decode_input(&bytes, None).unwrap_or_else(|e| panic!("{}: decode failed: {}", entry.file, e));
+        inner_instructions::annotate_report(&mut report, empty_meta());
         validator::validate(&mut report, None);
         patterns::detect_patterns(&report);
         let tx: VersionedTransaction = bincode::deserialize(&bytes)
@@ -665,5 +794,43 @@ fn corpus_signatures_verify_or_tamper_flagged() {
         let sig_flags = signature_verify::verify_report(&mut report);
         let has_mismatch = sig_flags.iter().any(|f| f.category == RiskCategory::SignatureMismatch);
         assert!(all_verified || has_mismatch, "{}: signatures neither all verified nor mismatch-flagged", entry.file);
+    }
+}
+
+#[test]
+fn failed_fixtures_decode_and_verify() {
+    let Some(manifest) = load_manifest() else {
+        return;
+    };
+    for entry in &manifest {
+        if !entry.failed {
+            continue;
+        }
+        let b64 = read_fixture(&entry.file);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64.trim())
+            .unwrap_or_else(|e| panic!("{}: invalid base64: {}", entry.file, e));
+        let (_, mut report) =
+            decoder::decode_input(&bytes, None).unwrap_or_else(|e| panic!("{}: decode failed: {}", entry.file, e));
+        assert_eq!(report.status, "DECODED SUCCESSFULLY", "{}", entry.file);
+        assert_eq!(
+            report.signatures.first(),
+            Some(&entry.signature),
+            "{}: manifest signature does not match fixture",
+            entry.file
+        );
+        inner_instructions::annotate_report(&mut report, empty_meta());
+        validator::validate(&mut report, None);
+        patterns::detect_patterns(&report);
+        let tx: VersionedTransaction = bincode::deserialize(&bytes)
+            .unwrap_or_else(|e| panic!("{}: not a versioned transaction: {}", entry.file, e));
+        let checks = signature_verify::verify_transaction(&tx);
+        assert_eq!(
+            checks.len(),
+            tx.message.header().num_required_signatures as usize,
+            "{}: signature check count mismatch",
+            entry.file
+        );
+        assert!(checks.iter().all(|c| c.verified), "{}: failed fixture signatures must verify", entry.file);
     }
 }

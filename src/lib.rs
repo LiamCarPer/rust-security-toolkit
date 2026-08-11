@@ -1,5 +1,6 @@
 pub mod account_roles;
 pub mod anchor_decoder;
+pub mod balance_changes;
 pub mod decoder;
 pub mod encoding;
 pub mod expectations_decoder;

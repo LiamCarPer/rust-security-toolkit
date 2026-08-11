@@ -816,6 +816,8 @@ mod tests {
             warnings: vec![],
             signature_verification: vec![],
             inner_instructions: vec![],
+            balance_changes_sol: vec![],
+            token_balance_changes: vec![],
         };
 
         let mut flags = Vec::new();
@@ -848,6 +850,8 @@ mod tests {
             warnings: vec![],
             signature_verification: vec![],
             inner_instructions: vec![],
+            balance_changes_sol: vec![],
+            token_balance_changes: vec![],
         };
 
         let mut flags = Vec::new();
@@ -889,6 +893,8 @@ mod tests {
             warnings: vec![],
             signature_verification: vec![],
             inner_instructions: vec![],
+            balance_changes_sol: vec![],
+            token_balance_changes: vec![],
         };
 
         validate(&mut report, None);
@@ -979,6 +985,8 @@ mod tests {
             warnings: vec![],
             signature_verification: vec![],
             inner_instructions: vec![],
+            balance_changes_sol: vec![],
+            token_balance_changes: vec![],
         }
     }
 

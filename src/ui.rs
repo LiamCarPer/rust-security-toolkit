@@ -215,6 +215,32 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
         println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
     }
 
+    // ── Balance Changes (from RPC meta) ─────────────────────────────────────
+    if !report.balance_changes_sol.is_empty() || !report.token_balance_changes.is_empty() {
+        println!();
+        println!("{}", "┌── Balance Changes (from RPC meta) ───────────────────────────────────────────────┐".bold());
+        for change in &report.balance_changes_sol {
+            let color = if change.delta < 0 { Color::Red } else { Color::Green };
+            println!(
+                "│ SOL {:<6}: {} lamports → {} ({:+} lamports)",
+                truncate_key(&change.pubkey),
+                change.pre,
+                change.post,
+                change.delta.to_string().color(color)
+            );
+        }
+        for change in &report.token_balance_changes {
+            let color = if change.delta_raw < 0 { Color::Red } else { Color::Green };
+            println!(
+                "│ TOKEN {:<6}: {} (mint {})",
+                truncate_key(&change.pubkey),
+                change.delta_human.color(color),
+                truncate_key(&change.mint)
+            );
+        }
+        println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
+    }
+
     // ── Structural Risk Flags ───────────────────────────────────────────────
     if !report.risk_flags.is_empty() {
         println!();

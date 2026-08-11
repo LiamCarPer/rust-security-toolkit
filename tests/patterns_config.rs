@@ -51,6 +51,8 @@ fn report(instructions: Vec<DecodedInstruction>) -> TransactionReport {
         warnings: Vec::new(),
         signature_verification: Vec::new(),
         inner_instructions: Vec::new(),
+        balance_changes_sol: Vec::new(),
+        token_balance_changes: Vec::new(),
     }
 }
 

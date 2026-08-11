@@ -30,6 +30,8 @@ fn make_report_with_program(program_id: &str) -> TransactionReport {
         warnings: vec![],
         signature_verification: vec![],
         inner_instructions: vec![],
+        balance_changes_sol: vec![],
+        token_balance_changes: vec![],
     }
 }
 

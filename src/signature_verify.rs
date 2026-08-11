@@ -131,6 +131,8 @@ mod tests {
             warnings: Vec::new(),
             signature_verification: checks,
             inner_instructions: Vec::new(),
+            balance_changes_sol: Vec::new(),
+            token_balance_changes: Vec::new(),
         }
     }
 

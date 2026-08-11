@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use rust_security_toolkit::types::{ExpectationsDoc, IdlJson, ProgramSchema, RiskSeverity, TransactionReport};
 use rust_security_toolkit::{
-    decoder, inner_instructions, patterns, signature_verify, sim_crossref, simulator, ui, validator,
+    balance_changes, decoder, inner_instructions, patterns, signature_verify, sim_crossref, simulator, ui, validator,
 };
 
 #[derive(Parser)]
@@ -135,7 +135,9 @@ async fn main() -> Result<()> {
     validator::validate(&mut report, schema.as_ref());
 
     if let Some(meta) = fetched_meta {
-        let warnings = inner_instructions::annotate_report(&mut report, meta);
+        let warnings = inner_instructions::annotate_report(&mut report, meta.clone());
+        report.warnings.extend(warnings);
+        let warnings = balance_changes::annotate_report(&mut report, meta);
         report.warnings.extend(warnings);
     }
 
@@ -273,6 +275,8 @@ mod tests {
             warnings: Vec::new(),
             signature_verification: Vec::new(),
             inner_instructions: Vec::new(),
+            balance_changes_sol: Vec::new(),
+            token_balance_changes: Vec::new(),
         }
     }
 

@@ -35,6 +35,14 @@ All notable changes to this project are documented in this file.
   the pattern engine analyzes the flattened top-level + inner view with
   parent-aware flags (same-lineage gating, no cross-parent false positives)
 - **getTransaction fetch fix**: mainnet returns result as an object with
+- **Balance-change analysis** (src/balance_changes.rs): meta pre/postBalances
+  and pre/postTokenBalances are rendered as per-account SOL and token deltas
+  (i128 math, sign-aware human amounts, ALT-loaded key resolution); shown on
+  the dashboard and in JSON for --signature fetches
+- **CPI-aware corpus refresh**: the attack-corpus fetch classifies on the
+  flattened top-level + inner view (real CPI-shaped attack txs are now
+  discoverable) and captures up to 2 failed transactions per refresh with
+  the compact error recorded in the manifest
   transaction [base64, encoding] and meta at result.meta; the parser now
   accepts the object shape (and the legacy array convention)
   sim_crossref, expectations_decoder, and signature_verify (fuzz crate),

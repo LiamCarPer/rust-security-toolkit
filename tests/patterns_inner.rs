@@ -74,6 +74,8 @@ fn report(instructions: Vec<DecodedInstruction>, inner_instructions: Vec<InnerIn
         warnings: Vec::new(),
         signature_verification: Vec::new(),
         inner_instructions,
+        balance_changes_sol: Vec::new(),
+        token_balance_changes: Vec::new(),
     }
 }
 

@@ -83,6 +83,7 @@ fn report_with_feeds(instructions: Vec<DecodedInstruction>) -> TransactionReport
         balance_changes_sol: vec![],
         token_balance_changes: vec![],
         oracle_feeds: vec![],
+        idl_source: None,
     }
 }
 

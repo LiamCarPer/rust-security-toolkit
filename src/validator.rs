@@ -875,6 +875,7 @@ mod tests {
             balance_changes_sol: vec![],
             token_balance_changes: vec![],
             oracle_feeds: Vec::new(),
+            idl_source: None,
         };
 
         let mut flags = Vec::new();
@@ -910,6 +911,7 @@ mod tests {
             balance_changes_sol: vec![],
             token_balance_changes: vec![],
             oracle_feeds: Vec::new(),
+            idl_source: None,
         };
 
         let mut flags = Vec::new();
@@ -954,6 +956,7 @@ mod tests {
             balance_changes_sol: vec![],
             token_balance_changes: vec![],
             oracle_feeds: Vec::new(),
+            idl_source: None,
         };
 
         validate(&mut report, None);
@@ -1047,6 +1050,7 @@ mod tests {
             balance_changes_sol: vec![],
             token_balance_changes: vec![],
             oracle_feeds: Vec::new(),
+            idl_source: None,
         }
     }
 
@@ -1282,6 +1286,7 @@ mod tests {
             balance_changes_sol: vec![],
             token_balance_changes: vec![],
             oracle_feeds: vec![],
+            idl_source: None,
         }
     }
 

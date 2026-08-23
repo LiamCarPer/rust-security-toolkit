@@ -6,6 +6,7 @@ pub mod decoder;
 pub mod encoding;
 pub mod expectations_decoder;
 pub mod html_report;
+pub mod idl_fetch;
 pub mod inner_instructions;
 pub mod instruction_decoder;
 pub mod internal_parser;

@@ -157,6 +157,7 @@ fn make_report() -> TransactionReport {
         balance_changes_sol: vec![],
         token_balance_changes: vec![],
         oracle_feeds: Vec::new(),
+        idl_source: None,
     }
 }
 
@@ -412,6 +413,7 @@ fn make_report_with_data() -> TransactionReport {
         balance_changes_sol: vec![],
         token_balance_changes: vec![],
         oracle_feeds: Vec::new(),
+        idl_source: None,
     }
 }
 

@@ -154,6 +154,7 @@ mod tests {
             balance_changes_sol: Vec::new(),
             token_balance_changes: Vec::new(),
             oracle_feeds: Vec::new(),
+            idl_source: None,
         }
     }
 

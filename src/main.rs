@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use rust_security_toolkit::types::{ExpectationsDoc, IdlJson, ProgramSchema, RiskSeverity, TransactionReport};
 use rust_security_toolkit::{
-    balance_changes, decoder, inner_instructions, patterns, signature_verify, sim_crossref, simulator, ui, validator,
+    balance_changes, decoder, inner_instructions, oracle, patterns, signature_verify, sim_crossref, simulator, ui,
+    validator,
 };
 
 #[derive(Parser)]
@@ -199,6 +200,10 @@ async fn main() -> Result<()> {
         // Resolve address lookup table pubkeys on-chain (v0 transactions)
         let alt_flags = simulator::resolve_address_lookup_tables(rpc_url, &mut report).await;
         report.risk_flags.extend(alt_flags);
+
+        // Decode and validate referenced oracle price feeds (Pyth).
+        let oracle_flags = oracle::run(rpc_url, &mut report).await.unwrap_or_default();
+        report.risk_flags.extend(oracle_flags);
     }
 
     let crossref_flags = sim_crossref::cross_reference(&mut report);
@@ -277,6 +282,7 @@ mod tests {
             inner_instructions: Vec::new(),
             balance_changes_sol: Vec::new(),
             token_balance_changes: Vec::new(),
+            oracle_feeds: Vec::new(),
         }
     }
 

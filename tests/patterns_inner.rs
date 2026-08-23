@@ -76,6 +76,7 @@ fn report(instructions: Vec<DecodedInstruction>, inner_instructions: Vec<InnerIn
         inner_instructions,
         balance_changes_sol: Vec::new(),
         token_balance_changes: Vec::new(),
+        oracle_feeds: Vec::new(),
     }
 }
 

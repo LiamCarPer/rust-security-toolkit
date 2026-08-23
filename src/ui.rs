@@ -361,6 +361,17 @@ pub fn render_tx_report(report: &TransactionReport, program_name: &str) -> Strin
                 "message": f.message,
             })
         }).collect::<Vec<_>>(),
+        "oracle_feeds": report.oracle_feeds.iter().map(|f| {
+            serde_json::json!({
+                "pubkey": f.pubkey,
+                "program": f.program,
+                "price": f.price,
+                "expo": f.expo,
+                "conf": f.conf,
+                "status": f.status,
+                "publish_time": f.publish_time,
+            })
+        }).collect::<Vec<_>>(),
         "simulation": report.simulation.as_ref().map(|s| {
             serde_json::json!({
                 "success": s.success,

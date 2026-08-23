@@ -6,6 +6,8 @@ pub const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpP
 pub const ASSOCIATED_TOKEN_PROGRAM_ID: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 pub const COMPUTE_BUDGET_PROGRAM_ID: &str = "ComputeBudget111111111111111111111111111111";
 pub const ADDRESS_LOOKUP_TABLE_PROGRAM_ID: &str = "AddressLookupTab1e1111111111111111111111111";
+pub const STAKE_PROGRAM_ID: &str = "Stake11111111111111111111111111111111111111";
+pub const VOTE_PROGRAM_ID: &str = "Vote111111111111111111111111111111111111111";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionReport {
@@ -38,6 +40,23 @@ pub struct TransactionReport {
     /// pairs whose balance changed are listed.
     #[serde(default)]
     pub token_balance_changes: Vec<TokenBalanceChange>,
+    /// Decoded oracle price feeds referenced by the transaction, populated by
+    /// the `--rpc` oracle pass. Offline runs leave this empty.
+    #[serde(default)]
+    pub oracle_feeds: Vec<OracleFeed>,
+}
+
+/// One decoded oracle price feed referenced by the transaction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OracleFeed {
+    pub pubkey: String,
+    pub program: String,
+    pub price: i64,
+    pub expo: i32,
+    pub conf: u64,
+    pub status: u32,
+    /// Pyth v2 publish time; `None` for v1 feeds (no time field).
+    pub publish_time: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -316,6 +335,17 @@ pub enum RiskCategory {
     /// A native instruction's compiled account list is longer than the
     /// expectations document declares; positional mapping may be misaligned.
     NativeAccountMismatch,
+    /// A referenced oracle price feed has no verifiable freshness bound
+    /// (Pyth v1, or a publish time outside the sanity window of the client
+    /// clock). Transaction-layer configuration risk, not a vuln claim.
+    StaleOraclePrice,
+    /// A referenced oracle feed's confidence is more than 1% of its price.
+    OracleConfidenceTooWide,
+    /// One instruction references oracle feeds with different exponents —
+    /// values at different decimal scales silently miscompare/miscombine.
+    OracleDecimalsMismatch,    /// The transaction's recent blockhash is expired or close to expiring
+    /// relative to the RPC-reported block height.
+    BlockhashExpired,
 }
 
 /// Per-rule pattern configuration. Severity strings are parsed by the

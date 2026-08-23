@@ -641,7 +641,8 @@ async fn check_upgrade_authority(rpc_url: &str, program_id: &str) -> Option<Opti
 }
 
 /// Fetch an account's raw data (base64) via getAccountInfo.
-async fn fetch_account_data(client: &reqwest::Client, rpc_url: &str, address: &str) -> Result<Option<Vec<u8>>> {
+/// Fetch the raw base64 account data for an address.
+pub async fn fetch_account_data(client: &reqwest::Client, rpc_url: &str, address: &str) -> Result<Option<Vec<u8>>> {
     let request = GetAccountInfoRequest {
         jsonrpc: "2.0".to_string(),
         id: 1,
@@ -681,6 +682,41 @@ async fn fetch_account_data(client: &reqwest::Client, rpc_url: &str, address: &s
         },
         None => Ok(None),
     }
+}
+
+/// Fetch just the owner of an account (base64 `getAccountInfo`; the owner is
+/// parsed from the response the data fetcher already receives but discards).
+/// Returns `Ok(None)` when the account does not exist.
+pub async fn fetch_account_owner(
+    client: &reqwest::Client,
+    rpc_url: &str,
+    address: &str,
+) -> anyhow::Result<Option<String>> {
+    let request = GetAccountInfoRequest {
+        jsonrpc: "2.0".to_string(),
+        id: 1,
+        method: "getAccountInfo".to_string(),
+        params: (
+            address.to_string(),
+            GetAccountInfoConfig { encoding: "base64".to_string(), commitment: "confirmed".to_string() },
+        ),
+    };
+
+    let response = client
+        .post(rpc_url)
+        .json(&request)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("Failed to send getAccountInfo RPC request")?;
+
+    let body: GetAccountInfoResponse = response.json().await.context("Failed to parse getAccountInfo RPC response")?;
+
+    if let Some(err) = body.error {
+        anyhow::bail!("RPC error: {}", err.message);
+    }
+
+    Ok(body.result.and_then(|r| r.value).map(|account| account.owner))
 }
 
 // ── Token Amount Resolution ──────────────────────────────────────────────────

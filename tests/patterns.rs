@@ -57,6 +57,7 @@ fn report(instructions: Vec<DecodedInstruction>) -> TransactionReport {
         inner_instructions: Vec::new(),
         balance_changes_sol: Vec::new(),
         token_balance_changes: Vec::new(),
+        oracle_feeds: Vec::new(),
     }
 }
 

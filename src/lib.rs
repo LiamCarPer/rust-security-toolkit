@@ -1,12 +1,16 @@
 pub mod account_roles;
 pub mod anchor_decoder;
 pub mod balance_changes;
+pub mod batch;
 pub mod decoder;
 pub mod encoding;
 pub mod expectations_decoder;
+pub mod html_report;
 pub mod inner_instructions;
 pub mod instruction_decoder;
 pub mod internal_parser;
+pub mod known_addresses;
+pub mod oracle;
 pub mod patterns;
 pub mod signature_verify;
 pub mod sim_crossref;

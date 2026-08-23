@@ -10,10 +10,7 @@ use rust_security_toolkit::types::{
 };
 
 fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
 }
 
 // ── Parser units ─────────────────────────────────────────────────────────────
@@ -124,10 +121,7 @@ fn wide_confidence_is_flagged() {
             .any(|f| f.category == RiskCategory::OracleConfidenceTooWide && f.severity == RiskSeverity::Warning),
         "{flags:#?}"
     );
-    assert!(
-        !flags.iter().any(|f| f.category == RiskCategory::OracleDecimalsMismatch),
-        "{flags:#?}"
-    );
+    assert!(!flags.iter().any(|f| f.category == RiskCategory::OracleDecimalsMismatch), "{flags:#?}");
 }
 
 #[test]
@@ -140,8 +134,20 @@ fn cross_feed_exponent_mismatch_is_critical() {
         data: serde_json::json!({}),
         raw_data_hex: String::new(),
         accounts: vec![
-            MappedAccount { name: Some("price_a".into()), pubkey: "AAA".into(), account_index: 0, is_signer: false, is_writable: false },
-            MappedAccount { name: Some("price_b".into()), pubkey: "BBB".into(), account_index: 1, is_signer: false, is_writable: false },
+            MappedAccount {
+                name: Some("price_a".into()),
+                pubkey: "AAA".into(),
+                account_index: 0,
+                is_signer: false,
+                is_writable: false,
+            },
+            MappedAccount {
+                name: Some("price_b".into()),
+                pubkey: "BBB".into(),
+                account_index: 1,
+                is_signer: false,
+                is_writable: false,
+            },
         ],
         token_amount: None,
     };
@@ -184,8 +190,8 @@ fn healthy_feeds_produce_no_flags() {
 
 #[tokio::test]
 async fn fetch_pyth_feeds_decodes_via_mocked_rpc() {
-    use httpmock::prelude::*;
     use httpmock::Method::POST;
+    use httpmock::prelude::*;
 
     let server = MockServer::start();
     let feed_data = test_pyth_v2_buffer(
@@ -232,8 +238,5 @@ async fn fetch_pyth_feeds_decodes_via_mocked_rpc() {
     assert_eq!(report.oracle_feeds.len(), 1, "feed must be decoded into the report");
     assert_eq!(report.oracle_feeds[0].price, 42_000_000);
     assert_eq!(report.oracle_feeds[0].expo, -6);
-    assert!(
-        flags.iter().any(|f| f.category == RiskCategory::OracleConfidenceTooWide),
-        "{flags:#?}"
-    );
+    assert!(flags.iter().any(|f| f.category == RiskCategory::OracleConfidenceTooWide), "{flags:#?}");
 }

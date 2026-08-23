@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use rust_security_toolkit::types::{ExpectationsDoc, IdlJson, ProgramSchema, RiskSeverity, TransactionReport};
 use rust_security_toolkit::{
-    balance_changes, batch, decoder, html_report, inner_instructions, known_addresses, oracle, patterns,
+    balance_changes, batch, decoder, html_report, idl_fetch, inner_instructions, known_addresses, oracle, patterns,
     signature_verify, sim_crossref, simulator, types, ui, validator,
 };
 
@@ -65,6 +65,18 @@ struct Cli {
     /// Pattern detection configuration JSON (per-rule severity overrides and toggles)
     #[arg(long = "patterns", value_name = "PATH")]
     patterns_config: Option<PathBuf>,
+
+    /// Fetch the program's Anchor IDL from chain and validate against it;
+    /// optional PROGRAM_ID targets a specific program (auto-detects otherwise)
+    #[arg(
+        long = "idl-auto",
+        value_name = "PROGRAM_ID",
+        num_args = 0..=1,
+        default_missing_value = "",
+        conflicts_with_all = ["idl", "expectations"],
+        requires = "rpc"
+    )]
+    idl_auto: Option<String>,
 
     /// Decode multiple transactions from an NDJSON file (one transaction per line)
     #[arg(long = "batch", value_name = "PATH", conflicts_with_all = ["tx_input", "file", "signature"])]
@@ -175,7 +187,7 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    let schema: Option<ProgramSchema> = match (idl, expectations) {
+    let mut schema: Option<ProgramSchema> = match (idl, expectations) {
         (Some(idl), None) => Some(ProgramSchema::Idl(idl)),
         (None, Some(exp)) => Some(ProgramSchema::Native(exp)),
         (None, None) => None,
@@ -194,6 +206,40 @@ async fn main() -> Result<()> {
     };
 
     let (raw_bytes_decoded, mut report) = decoder::decode_input(&input_bytes, schema.as_ref())?;
+
+    // --idl-auto: fetch the target program's IDL from chain and re-decode with
+    // full validation enabled. Only runs when no explicit schema was supplied.
+    if cli.idl_auto.is_some()
+        && schema.is_none()
+        && let Some(rpc_url) = cli.rpc.clone()
+    {
+        let requested = cli.idl_auto.as_deref().filter(|s| !s.is_empty()).map(String::from);
+        match resolve_auto_target(&report, requested.as_deref()) {
+            Some(program_id) => match idl_fetch::fetch_idl(&rpc_url, &program_id).await {
+                Ok(Some(idl)) => {
+                    let fetched_schema = ProgramSchema::Idl(idl);
+                    match decoder::decode_input(&input_bytes, Some(&fetched_schema)) {
+                        Ok((_, fresh)) => {
+                            report = fresh;
+                            schema = Some(fetched_schema);
+                            report.idl_source = Some("on-chain".to_string());
+                        }
+                        Err(e) => report.warnings.push(format!("IDL auto-fetch re-decode failed: {}", e)),
+                    }
+                }
+                Ok(None) => report.warnings.push(format!("IDL auto-fetch: no on-chain IDL found for {}", program_id)),
+                Err(e) => report.warnings.push(format!("IDL auto-fetch failed: {}", e)),
+            },
+            None => {
+                report.warnings.push("IDL auto-fetch: no non-builtin program found to fetch an IDL for".to_string())
+            }
+        }
+    }
+
+    if schema.is_some() && report.idl_source.is_none() && cli.idl.is_some() {
+        report.idl_source = Some("file".to_string());
+    }
+
     validator::validate(&mut report, schema.as_ref());
 
     if let Some(meta) = fetched_meta {
@@ -308,6 +354,29 @@ async fn main() -> Result<()> {
     std::process::exit(i32::from(worst_severity_exit_code(&report, min_severity)));
 }
 
+fn resolve_auto_target(report: &TransactionReport, requested: Option<&str>) -> Option<solana_sdk::pubkey::Pubkey> {
+    use std::str::FromStr;
+    const BUILTIN: &[&str] = &[
+        rust_security_toolkit::types::SYSTEM_PROGRAM_ID,
+        rust_security_toolkit::types::TOKEN_PROGRAM_ID,
+        rust_security_toolkit::types::TOKEN_2022_PROGRAM_ID,
+        rust_security_toolkit::types::ASSOCIATED_TOKEN_PROGRAM_ID,
+        rust_security_toolkit::types::COMPUTE_BUDGET_PROGRAM_ID,
+        rust_security_toolkit::types::ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
+        rust_security_toolkit::types::STAKE_PROGRAM_ID,
+        rust_security_toolkit::types::VOTE_PROGRAM_ID,
+    ];
+    if let Some(id) = requested.filter(|s| !s.is_empty()) {
+        return solana_sdk::pubkey::Pubkey::from_str(id).ok();
+    }
+    report
+        .instructions
+        .iter()
+        .map(|ix| ix.program_id.as_str())
+        .find(|pid| !BUILTIN.contains(pid))
+        .and_then(|p| solana_sdk::pubkey::Pubkey::from_str(p).ok())
+}
+
 fn parse_fail_on(level: Option<&str>) -> RiskSeverity {
     match level {
         Some("warning") => RiskSeverity::Warning,
@@ -378,6 +447,7 @@ mod tests {
             balance_changes_sol: Vec::new(),
             token_balance_changes: Vec::new(),
             oracle_feeds: Vec::new(),
+            idl_source: None,
         }
     }
 

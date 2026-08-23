@@ -33,6 +33,9 @@ pub fn render_html(report: &TransactionReport) -> String {
         esc(&report.fee_payer),
         esc(&report.recent_blockhash)
     ));
+    if let Some(ref src) = report.idl_source {
+        out.push_str(&format!("<p>IDL source: <code>{}</code></p>\n", esc(src)));
+    }
 
     if !report.signatures.is_empty() {
         out.push_str("<h2>Signatures</h2>\n<table><tr><th>#</th><th>Signature</th><th>Verified</th></tr>\n");
@@ -175,6 +178,7 @@ mod tests {
             balance_changes_sol: vec![],
             token_balance_changes: vec![],
             oracle_feeds: vec![],
+            idl_source: None,
         };
         let html = render_html(&report);
         assert!(html.contains("Accounts"));
@@ -202,6 +206,7 @@ mod tests {
             balance_changes_sol: vec![],
             token_balance_changes: vec![],
             oracle_feeds: vec![],
+            idl_source: None,
         };
         report.warnings.push(String::from("&<>"));
         let html = render_html(&report);
@@ -230,6 +235,7 @@ mod tests {
             balance_changes_sol: vec![],
             token_balance_changes: vec![],
             oracle_feeds: vec![],
+            idl_source: None,
         };
         let _ = render_html(&report);
     }
@@ -255,6 +261,7 @@ mod tests {
             balance_changes_sol: vec![],
             token_balance_changes: vec![],
             oracle_feeds: vec![],
+            idl_source: None,
         };
         for severity in [RiskSeverity::Critical, RiskSeverity::Warning, RiskSeverity::Info] {
             report.risk_flags.push(RiskFlag {

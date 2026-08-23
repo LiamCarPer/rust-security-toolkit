@@ -44,6 +44,10 @@ pub struct TransactionReport {
     /// the `--rpc` oracle pass. Offline runs leave this empty.
     #[serde(default)]
     pub oracle_feeds: Vec<OracleFeed>,
+    /// Provenance of the IDL used for decoding: "file", "on-chain", or
+    /// "bundled"; None when no schema was applied.
+    #[serde(default)]
+    pub idl_source: Option<String>,
 }
 
 /// One decoded oracle price feed referenced by the transaction.

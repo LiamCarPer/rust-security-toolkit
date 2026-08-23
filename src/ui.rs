@@ -33,6 +33,10 @@ pub fn render_terminal_with_known(
     let status_color = if report.status.contains("SUCCESSFULLY") { Color::Green } else { Color::Red };
     println!("[+] Status: {}", report.status.color(status_color).bold());
 
+    if let Some(ref src) = report.idl_source {
+        println!("[+] IDL Source: {}", src.cyan());
+    }
+
     if let Some(ref sim) = report.simulation {
         let sim_status = if sim.success {
             format!("WOULD SUCCEED ({} CU consumed)", sim.units_consumed).green()

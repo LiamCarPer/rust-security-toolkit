@@ -36,6 +36,12 @@ All notable changes to this project are documented in this file.
   parent-aware flags (same-lineage gating, no cross-parent false positives)
 - **getTransaction fetch fix**: mainnet returns result as an object with
 - **Balance-change analysis** (src/balance_changes.rs): meta pre/postBalances
+- **On-chain IDL auto-fetch**: --idl-auto [PROGRAM_ID] fetches Anchor IDLs
+  from chain (legacy anchor:idl derived account and the modern
+  Program-Metadata-Program spec incl. zlib/gzip compression and base58/utf8
+  encodings), re-decodes and re-validates with full tier-1/tier-2 checks, and
+  records provenance in report.idl_source; live-verified against Jupiter
+  (legacy) and zinc/soleng (PMP)
   and pre/postTokenBalances are rendered as per-account SOL and token deltas
   (i128 math, sign-aware human amounts, ALT-loaded key resolution); shown on
   the dashboard and in JSON for --signature fetches

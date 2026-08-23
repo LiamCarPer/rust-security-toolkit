@@ -1,6 +1,6 @@
 use crate::types::{
-    ExpectationsDoc, IdlJson, IdlPda, KNOWN_PROGRAM_IDS, KNOWN_SYSVAR_IDS, ProgramSchema, RiskCategory, RiskFlag,
-    RiskSeverity, TransactionReport,
+    ExpectationsDoc, IdlArg, IdlJson, IdlPda, KNOWN_PROGRAM_IDS, KNOWN_SYSVAR_IDS, ProgramSchema, RiskCategory,
+    RiskFlag, RiskSeverity, TransactionReport,
 };
 
 /// Run all structural risk validations against a decoded transaction report.
@@ -151,8 +151,8 @@ fn validate_pda_seeds_tier2(report: &mut TransactionReport, idl: &IdlJson, flags
                 Err(_) => continue,
             };
 
-            match try_find_pda(pda, report, decoded_ix, &program_id) {
-                Ok((expected_pubkey, bump)) => {
+            match try_find_pda(pda, report, decoded_ix, &program_id, &idl_ix.args) {
+                PdaCheckOutcome::Resolved((expected_pubkey, bump)) => {
                     if let Some(account) = report.accounts.get_mut(mapped.account_index as usize) {
                         account.pda_info = Some(crate::types::PdaInfo {
                             seeds_declared: describe_seeds_vec(pda),
@@ -179,7 +179,7 @@ fn validate_pda_seeds_tier2(report: &mut TransactionReport, idl: &IdlJson, flags
                         });
                     }
                 }
-                Err(e) => {
+                PdaCheckOutcome::Warning(e) => {
                     flags.push(RiskFlag {
                         severity: RiskSeverity::Warning,
                         category: RiskCategory::PdaSeedMismatch,
@@ -191,9 +191,16 @@ fn validate_pda_seeds_tier2(report: &mut TransactionReport, idl: &IdlJson, flags
                         details: e,
                     });
                 }
+                PdaCheckOutcome::Unresolved => {}
             }
         }
     }
+}
+
+enum PdaCheckOutcome {
+    Resolved((solana_sdk::pubkey::Pubkey, u8)),
+    Warning(String),
+    Unresolved,
 }
 
 fn try_find_pda(
@@ -201,40 +208,88 @@ fn try_find_pda(
     report: &TransactionReport,
     ix: &crate::types::DecodedInstruction,
     program_id: &solana_sdk::pubkey::Pubkey,
-) -> Result<(solana_sdk::pubkey::Pubkey, u8), String> {
+    args: &[IdlArg],
+) -> PdaCheckOutcome {
     use solana_sdk::pubkey::Pubkey;
 
     let mut seed_bytes: Vec<Vec<u8>> = Vec::new();
     for seed in &pda.seeds {
         match seed.kind.as_str() {
             "const" => {
-                let val = seed.value.as_ref().ok_or("const seed missing value")?;
+                let Some(val) = seed.value.as_ref() else {
+                    return PdaCheckOutcome::Warning("const seed missing value".to_string());
+                };
                 seed_bytes.push(val.clone());
             }
             "account" => {
-                let path = seed
-                    .path
-                    .as_ref()
-                    .or(seed.account.as_ref())
-                    .ok_or("account seed missing path/account reference")?;
-                let account_pubkey = resolve_account_path(path, report, ix)?;
-                seed_bytes.push(account_pubkey.to_bytes().to_vec());
+                let Some(path) = seed.path.as_ref().or(seed.account.as_ref()) else {
+                    return PdaCheckOutcome::Warning("account seed missing path/account reference".to_string());
+                };
+                match resolve_account_path(path, report, ix) {
+                    Ok(pk) => seed_bytes.push(pk.to_bytes().to_vec()),
+                    Err(e) => return PdaCheckOutcome::Warning(e),
+                }
             }
             "arg" => {
-                return Err(format!(
-                    "Cannot resolve arg seed '{}' without runtime argument values",
-                    seed.path.as_deref().unwrap_or("unknown")
-                ));
+                let Some(path) = seed.path.as_deref() else {
+                    return PdaCheckOutcome::Unresolved;
+                };
+                match resolve_arg_seed(path, args, &ix.data) {
+                    Some(bytes) => seed_bytes.push(bytes),
+                    None => return PdaCheckOutcome::Unresolved,
+                }
             }
             _ => {
-                return Err(format!("Unsupported seed kind: {}", seed.kind));
+                return PdaCheckOutcome::Warning(format!("Unsupported seed kind: {}", seed.kind));
             }
         }
     }
 
     let seed_slices: Vec<&[u8]> = seed_bytes.iter().map(|v| v.as_slice()).collect();
     let (pk, bump) = Pubkey::find_program_address(&seed_slices, program_id);
-    Ok((pk, bump))
+    PdaCheckOutcome::Resolved((pk, bump))
+}
+
+fn resolve_arg_seed(path: &str, args: &[IdlArg], data: &serde_json::Value) -> Option<Vec<u8>> {
+    let first_component = path.split('.').next()?;
+    let arg = args.iter().find(|a| a.name == first_component)?;
+    let ty = arg.ty.as_str()?;
+    let value = resolve_json_path(data, path)?;
+    encode_arg_seed(value, ty)
+}
+
+fn resolve_json_path<'a>(data: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut current = data;
+    for component in path.split('.') {
+        current = current.get(component)?;
+    }
+    Some(current)
+}
+
+fn encode_arg_seed(value: &serde_json::Value, ty: &str) -> Option<Vec<u8>> {
+    fn as_int(value: &serde_json::Value) -> Option<i128> {
+        if let Some(v) = value.as_u64() {
+            return Some(v as i128);
+        }
+        if let Some(v) = value.as_i64() {
+            return Some(v as i128);
+        }
+        value.as_str()?.parse::<i128>().ok()
+    }
+    match ty {
+        "u8" => as_int(value).and_then(|v| u8::try_from(v).ok()).map(|v| vec![v]),
+        "u16" => as_int(value).and_then(|v| u16::try_from(v).ok()).map(|v| v.to_le_bytes().to_vec()),
+        "u32" => as_int(value).and_then(|v| u32::try_from(v).ok()).map(|v| v.to_le_bytes().to_vec()),
+        "u64" => as_int(value).and_then(|v| u64::try_from(v).ok()).map(|v| v.to_le_bytes().to_vec()),
+        "i64" => as_int(value).and_then(|v| i64::try_from(v).ok()).map(|v| v.to_le_bytes().to_vec()),
+        "string" => value.as_str().map(|s| s.as_bytes().to_vec()),
+        "bool" => value.as_bool().map(|b| vec![if b { 1 } else { 0 }]),
+        "publicKey" => {
+            let decoded = value.as_str().and_then(|s| bs58::decode(s).into_vec().ok())?;
+            if decoded.len() == 32 { Some(decoded) } else { None }
+        }
+        _ => None,
+    }
 }
 
 fn resolve_account_path(
@@ -739,6 +794,7 @@ fn validate_alt_integrity(report: &TransactionReport, flags: &mut Vec<RiskFlag>)
 mod tests {
     use super::*;
     use crate::types::*;
+    use solana_sdk::pubkey::Pubkey;
 
     #[test]
     fn test_empty_seeds_flag() {
@@ -1156,5 +1212,195 @@ mod tests {
                 .iter()
                 .any(|f| f.category == RiskCategory::MissingSigner && f.severity == RiskSeverity::Critical)
         );
+    }
+
+    fn arg_seed_idl(_amount_json: serde_json::Value, ty: &str) -> IdlJson {
+        IdlJson {
+            version: "0.1.0".into(),
+            name: "test_program".into(),
+            instructions: vec![IdlInstruction {
+                name: "deposit".into(),
+                accounts: vec![IdlAccountItem {
+                    name: "vault".into(),
+                    is_mut: true,
+                    is_signer: false,
+                    pda: Some(IdlPda {
+                        seeds: vec![IdlSeed {
+                            kind: "arg".into(),
+                            value: None,
+                            path: Some("amount".into()),
+                            account: None,
+                        }],
+                    }),
+                    desc: None,
+                }],
+                args: vec![IdlArg { name: "amount".into(), ty: serde_json::json!(ty) }],
+            }],
+            accounts: vec![],
+            types: vec![],
+        }
+    }
+
+    fn arg_seed_report(program_id: &Pubkey, vault_pubkey: &str, data: serde_json::Value) -> TransactionReport {
+        TransactionReport {
+            status: "OK".into(),
+            fee_payer: "11111111111111111111111111111111".into(),
+            signatures: vec![],
+            recent_blockhash: "11111111111111111111111111111111".into(),
+            message_version: None,
+            accounts: vec![AccountInfo {
+                index: 0,
+                pubkey: vault_pubkey.to_string(),
+                is_signer: false,
+                is_writable: true,
+                role: None,
+                pda_info: None,
+            }],
+            instructions: vec![DecodedInstruction {
+                index: 0,
+                program_id: program_id.to_string(),
+                program_name: "Test Program".into(),
+                instruction_name: Some("deposit".into()),
+                accounts: vec![MappedAccount {
+                    name: Some("vault".into()),
+                    pubkey: vault_pubkey.to_string(),
+                    account_index: 0,
+                    is_signer: false,
+                    is_writable: true,
+                }],
+                data,
+                raw_data_hex: String::new(),
+                token_amount: None,
+            }],
+            address_lookup_tables: vec![],
+            compute_budget: None,
+            risk_flags: vec![],
+            simulation: None,
+            warnings: vec![],
+            signature_verification: vec![],
+            inner_instructions: vec![],
+            balance_changes_sol: vec![],
+            token_balance_changes: vec![],
+            oracle_feeds: vec![],
+        }
+    }
+
+    #[test]
+    fn arg_seed_u64_matches() {
+        let program_id = Pubkey::new_unique();
+        let (expected, bump) = Pubkey::find_program_address(&[42u64.to_le_bytes().as_slice()], &program_id);
+        let idl = arg_seed_idl(serde_json::json!("42"), "u64");
+        let mut report = arg_seed_report(&program_id, &expected.to_string(), serde_json::json!({"amount": "42"}));
+        let mut flags = Vec::new();
+        validate_pda_seeds_tier2(&mut report, &idl, &mut flags);
+        assert!(flags.is_empty(), "flags: {:?}", flags);
+        let pda_info = report.accounts[0].pda_info.as_ref().expect("pda_info populated");
+        assert_eq!(pda_info.bump, Some(bump));
+    }
+
+    #[test]
+    fn arg_seed_u64_mismatch_flags_critical() {
+        let program_id = Pubkey::new_unique();
+        let (expected, _) = Pubkey::find_program_address(&[42u64.to_le_bytes().as_slice()], &program_id);
+        let idl = arg_seed_idl(serde_json::json!("42"), "u64");
+        let wrong = Pubkey::new_unique();
+        let mut report = arg_seed_report(&program_id, &wrong.to_string(), serde_json::json!({"amount": "42"}));
+        let mut flags = Vec::new();
+        validate_pda_seeds_tier2(&mut report, &idl, &mut flags);
+        assert!(
+            flags.iter().any(|f| f.category == RiskCategory::PdaSeedMismatch && f.severity == RiskSeverity::Critical)
+        );
+        assert_ne!(wrong.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn arg_seed_numeric_json_also_works() {
+        let program_id = Pubkey::new_unique();
+        let (expected, _) = Pubkey::find_program_address(&[42u64.to_le_bytes().as_slice()], &program_id);
+        let idl = arg_seed_idl(serde_json::json!("42"), "u64");
+        let mut report = arg_seed_report(&program_id, &expected.to_string(), serde_json::json!({"amount": 42}));
+        let mut flags = Vec::new();
+        validate_pda_seeds_tier2(&mut report, &idl, &mut flags);
+        assert!(flags.is_empty());
+    }
+
+    #[test]
+    fn arg_seed_public_key_encoding() {
+        use std::str::FromStr;
+        let authority = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
+        let program_id = Pubkey::new_unique();
+        let (expected, _) = Pubkey::find_program_address(&[authority.as_ref()], &program_id);
+        let mut idl = arg_seed_idl(serde_json::json!(authority.to_string()), "publicKey");
+        idl.instructions[0].args[0].name = "authority".into();
+        idl.instructions[0].args[0].ty = serde_json::json!("publicKey");
+        idl.instructions[0].accounts[0].pda.as_mut().unwrap().seeds[0].path = Some("authority".into());
+        let mut report = arg_seed_report(
+            &program_id,
+            &expected.to_string(),
+            serde_json::json!({"authority": authority.to_string()}),
+        );
+        let mut flags = Vec::new();
+        validate_pda_seeds_tier2(&mut report, &idl, &mut flags);
+        assert!(flags.is_empty(), "flags: {:?}", flags);
+    }
+
+    #[test]
+    fn unresolved_arg_seed_skips_silently() {
+        let program_id = Pubkey::new_unique();
+        let idl = arg_seed_idl(serde_json::json!("42"), "u64");
+        let mut report =
+            arg_seed_report(&program_id, "VaultPubkey111111111111111111111111111111111", serde_json::Value::Null);
+        let mut flags = Vec::new();
+        validate_pda_seeds_tier2(&mut report, &idl, &mut flags);
+        assert!(flags.is_empty(), "flags: {:?}", flags);
+        assert!(report.accounts[0].pda_info.is_none());
+    }
+
+    #[test]
+    fn unknown_arg_type_skips_silently() {
+        let program_id = Pubkey::new_unique();
+        let idl = arg_seed_idl(serde_json::json!("42"), "u128");
+        let mut report = arg_seed_report(
+            &program_id,
+            "VaultPubkey111111111111111111111111111111111",
+            serde_json::json!({"amount": "42"}),
+        );
+        let mut flags = Vec::new();
+        validate_pda_seeds_tier2(&mut report, &idl, &mut flags);
+        assert!(flags.is_empty(), "flags: {:?}", flags);
+    }
+
+    #[test]
+    fn nested_arg_path_resolves() {
+        let program_id = Pubkey::new_unique();
+        let (expected, bump) = Pubkey::find_program_address(&[7u64.to_le_bytes().as_slice()], &program_id);
+        let mut idl = arg_seed_idl(serde_json::json!("7"), "u64");
+        idl.instructions[0].args[0].name = "config".into();
+        idl.instructions[0].accounts[0].pda.as_mut().unwrap().seeds[0].path = Some("config.amount".into());
+        let mut report =
+            arg_seed_report(&program_id, &expected.to_string(), serde_json::json!({"config": {"amount": "7"}}));
+        let mut flags = Vec::new();
+        validate_pda_seeds_tier2(&mut report, &idl, &mut flags);
+        assert!(flags.is_empty(), "flags: {:?}", flags);
+        let pda_info = report.accounts[0].pda_info.as_ref().expect("pda_info populated");
+        assert_eq!(pda_info.bump, Some(bump));
+    }
+
+    #[test]
+    fn mixed_const_and_arg_seeds_derive() {
+        let program_id = Pubkey::new_unique();
+        const CONST_SEED: &[u8] = b"vault";
+        let mut combined = CONST_SEED.to_vec();
+        combined.extend_from_slice(&42u64.to_le_bytes());
+        let (expected, bump) = Pubkey::find_program_address(&[CONST_SEED, 42u64.to_le_bytes().as_slice()], &program_id);
+        let mut idl = arg_seed_idl(serde_json::json!("42"), "u64");
+        let seeds = &mut idl.instructions[0].accounts[0].pda.as_mut().unwrap().seeds;
+        seeds.insert(0, IdlSeed { kind: "const".into(), value: Some(CONST_SEED.to_vec()), path: None, account: None });
+        let _ = combined;
+        let mut report = arg_seed_report(&program_id, &expected.to_string(), serde_json::json!({"amount": "42"}));
+        let mut flags = Vec::new();
+        validate_pda_seeds_tier2(&mut report, &idl, &mut flags);
+        assert!(flags.is_empty(), "flags: {:?}", flags);
+        assert_eq!(report.accounts[0].pda_info.as_ref().expect("pda").bump, Some(bump));
     }
 }

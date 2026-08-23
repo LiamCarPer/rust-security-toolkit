@@ -1,9 +1,26 @@
 use colored::*;
 
+use crate::known_addresses::KnownAddresses;
 use crate::types::{RiskSeverity, TransactionReport};
+
+fn display_key(key: &str, known: Option<&KnownAddresses>) -> String {
+    match known.and_then(|k| k.name(key)) {
+        Some(name) => format!("{} ({})", name, truncate_key(key)),
+        None => truncate_key(key),
+    }
+}
 
 /// Render the ANSI-styled terminal dashboard.
 pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
+    render_terminal_with_known(report, show_network_banner, None);
+}
+
+/// Render the ANSI-styled terminal dashboard with a known-address registry.
+pub fn render_terminal_with_known(
+    report: &TransactionReport,
+    show_network_banner: bool,
+    known: Option<&KnownAddresses>,
+) {
     let border = "═".repeat(76);
 
     println!();
@@ -30,7 +47,7 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
         println!("[+] Simulation: {}", sim_status);
     }
 
-    println!("[+] Fee Payer: {} (Account #0)", truncate_key(&report.fee_payer));
+    println!("[+] Fee Payer: {} (Account #0)", display_key(&report.fee_payer, known));
     if !report.signature_verification.is_empty() {
         println!("[+] Signatures:");
         for check in &report.signature_verification {
@@ -74,7 +91,7 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
     for account in &report.accounts {
         let signer = if account.is_signer { "Signer".bold() } else { "Signer".normal() };
         let writable = if account.is_writable { "Writable".yellow() } else { "Read-only".dimmed() };
-        print!("│ #{:<2}: {:<15} [{}, {}]", account.index, truncate_key(&account.pubkey), signer, writable);
+        print!("│ #{:<2}: {:<15} [{}, {}]", account.index, display_key(&account.pubkey, known), signer, writable);
         if let Some(ref pda) = account.pda_info {
             print!(" (PDA: {})", pda.seeds_declared.join(" + "));
         }
@@ -132,7 +149,7 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
             println!(
                 "│   │   ├── {:<12}: {:<15} (Account #{}) {}",
                 format!("{}:", label),
-                truncate_key(&account.pubkey),
+                display_key(&account.pubkey, known),
                 account.account_index,
                 missing
             );
@@ -223,7 +240,7 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
             let color = if change.delta < 0 { Color::Red } else { Color::Green };
             println!(
                 "│ SOL {:<6}: {} lamports → {} ({:+} lamports)",
-                truncate_key(&change.pubkey),
+                display_key(&change.pubkey, known),
                 change.pre,
                 change.post,
                 change.delta.to_string().color(color)
@@ -233,9 +250,9 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
             let color = if change.delta_raw < 0 { Color::Red } else { Color::Green };
             println!(
                 "│ TOKEN {:<6}: {} (mint {})",
-                truncate_key(&change.pubkey),
+                display_key(&change.pubkey, known),
                 change.delta_human.color(color),
-                truncate_key(&change.mint)
+                display_key(&change.mint, known)
             );
         }
         println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
@@ -294,7 +311,26 @@ pub fn render_terminal(report: &TransactionReport, show_network_banner: bool) {
 
 /// Export a JSON report to stdout.
 pub fn render_json(report: &TransactionReport) -> String {
-    serde_json::to_string_pretty(report).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
+    let mut value = serde_json::to_value(report).unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("schema_version".to_string(), serde_json::json!("1.0"));
+    }
+    serde_json::to_string_pretty(&value).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
+}
+
+/// Render a terminal batch summary: one line per transaction with its exit code.
+pub fn render_batch_summary(entries: &[(usize, String, u8)]) {
+    println!();
+    println!("{}", "┌── Batch Summary ─────────────────────────────────────────────────────────────────┐".bold());
+    for (index, signature, exit_code) in entries {
+        let color = match exit_code {
+            0 => Color::Green,
+            1 => Color::Yellow,
+            _ => Color::Red,
+        };
+        println!("│ #{:<3} {} exit={}", index, truncate_key(signature), exit_code.to_string().color(color));
+    }
+    println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
 }
 
 /// Export the transaction report for `sat` consumption.

@@ -24,6 +24,12 @@
 - **Actual high-CU flagging** - when simulation reports per-instruction compute units, the estimate-based high-CU warnings are superseded: refuted flags are removed and warnings are emitted from actual consumption
 - **CPI-aware decoding** - `--signature` fetches getTransaction meta and decodes all inner instructions (with ALT-loaded account resolution, positional role names, and token amounts), rendered as an indented tree; the pattern engine analyzes the full flattened view with parent-aware flags
 - **Balance-change analysis** - meta pre/postBalances and pre/postTokenBalances are rendered as per-account SOL and token deltas (sign-aware human amounts); the corpus refresh classifies on the CPI view and captures failed transactions
+- **Stake/Vote decoding** - Stake, and Vote program instructions decoded with named fields and positional account roles
+- **PDA arg-seed verification (tier 2)** - Anchor IDL `arg` seeds are resolved against decoded argument values (u8-u64/i64 LE, string UTF-8, bool, publicKey) and the derived PDA is compared against the transaction; unresolvable args skip silently
+- **Batch mode** - `--batch <NDJSON>` decodes many transactions in one run (JSONL output with `--json`, per-tx exit-code summary otherwise)
+- **Known-address registry** - `--known-addresses JSON` names well-known pubkeys across the dashboard
+- **Blockhash freshness** - with `--rpc`, expired or near-expiry blockhashes raise BlockhashExpired flags
+- **HTML report export** - `--output-html` writes a single self-contained styled HTML report
 - **Severity-based exit codes** — The CLI exits `0` (clean), `1` (Info/Warning flags), or `2` (any Critical flag), so scripts and CI can gate on audit results.
 - **Cross-tool integration** — Structured JSON export (`--output-tx-report`) consumable by the Solana Audit Toolkit (`sat`) for correlating runtime account configuration against static `#[derive(Accounts)]` analysis.
 - **Internal correctness gate** — `--validate-decoding` runs a lightweight byte-level parser alongside `solana-sdk` and cross-checks every structural count (signatures, accounts, instructions, ALT lookups) against the SDK decode, surfacing internal tooling bugs as `TOOL_DECODE_MISMATCH` warnings.

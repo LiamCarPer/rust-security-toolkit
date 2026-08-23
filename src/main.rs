@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use rust_security_toolkit::types::{ExpectationsDoc, IdlJson, ProgramSchema, RiskSeverity, TransactionReport};
 use rust_security_toolkit::{
-    balance_changes, decoder, inner_instructions, oracle, patterns, signature_verify, sim_crossref, simulator, ui,
-    validator,
+    balance_changes, batch, decoder, html_report, inner_instructions, known_addresses, oracle, patterns,
+    signature_verify, sim_crossref, simulator, types, ui, validator,
 };
 
 #[derive(Parser)]
@@ -66,6 +66,22 @@ struct Cli {
     #[arg(long = "patterns", value_name = "PATH")]
     patterns_config: Option<PathBuf>,
 
+    /// Decode multiple transactions from an NDJSON file (one transaction per line)
+    #[arg(long = "batch", value_name = "PATH", conflicts_with_all = ["tx_input", "file", "signature"])]
+    batch: Option<PathBuf>,
+
+    /// Known-address registry JSON (pubkey -> display name)
+    #[arg(long = "known-addresses", value_name = "PATH")]
+    known_addresses: Option<PathBuf>,
+
+    /// Only severities at or above this level count toward the exit code
+    #[arg(long = "fail-on", value_name = "SEVERITY", value_parser = ["info", "warning", "critical"])]
+    fail_on: Option<String>,
+
+    /// Write a single-file HTML report
+    #[arg(long = "output-html", value_name = "PATH")]
+    output_html: Option<PathBuf>,
+
     /// Run internal byte-level parser alongside solana-sdk and flag any structural disagreements
     #[arg(long = "validate-decoding")]
     validate_decoding: bool,
@@ -74,6 +90,40 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let min_severity = parse_fail_on(cli.fail_on.as_deref());
+    let min_severity_for_batch = min_severity.clone();
+
+    if let Some(ref batch_path) = cli.batch {
+        let contents = std::fs::read_to_string(batch_path).context("Failed to read batch file")?;
+        let lines = batch::parse_batch_input(&contents).map_err(|e| anyhow::anyhow!("Invalid batch input: {}", e))?;
+        let mut entries: Vec<(usize, String, u8)> = Vec::new();
+        let mut worst = 0u8;
+        for (i, line) in lines.iter().enumerate() {
+            match batch::decode_batch_line(line) {
+                Ok((_, mut report)) => {
+                    validator::validate(&mut report, None);
+                    report.risk_flags.extend(patterns::detect_patterns(&report));
+                    types::dedup_risk_flags(&mut report.risk_flags);
+                    let code = worst_severity_exit_code(&report, min_severity_for_batch.clone());
+                    worst = worst.max(code);
+                    if cli.json {
+                        println!("{}", ui::render_json(&report));
+                    } else {
+                        let sig = report.signatures.first().cloned().unwrap_or_default();
+                        entries.push((i, sig, code));
+                    }
+                }
+                Err(e) => {
+                    eprintln!("batch line {} failed: {}", i, e);
+                    worst = worst.max(1);
+                }
+            }
+        }
+        if !cli.json {
+            ui::render_batch_summary(&entries);
+        }
+        std::process::exit(i32::from(worst));
+    }
 
     // All input sources are read as bytes so raw binary transactions work
     // from stdin and --file; encoding detection applies to UTF-8 text.
@@ -130,6 +180,17 @@ async fn main() -> Result<()> {
         (None, Some(exp)) => Some(ProgramSchema::Native(exp)),
         (None, None) => None,
         (Some(_), Some(_)) => anyhow::bail!("--idl and --expectations are mutually exclusive"),
+    };
+
+    let known_addresses: Option<known_addresses::KnownAddresses> = match &cli.known_addresses {
+        Some(path) => {
+            let contents = std::fs::read_to_string(path).context("Failed to read known-addresses file")?;
+            Some(
+                known_addresses::parse(&contents)
+                    .map_err(|e| anyhow::anyhow!("Invalid known-addresses JSON: {}", e))?,
+            )
+        }
+        None => None,
     };
 
     let (raw_bytes_decoded, mut report) = decoder::decode_input(&input_bytes, schema.as_ref())?;
@@ -204,6 +265,14 @@ async fn main() -> Result<()> {
         // Decode and validate referenced oracle price feeds (Pyth).
         let oracle_flags = oracle::run(rpc_url, &mut report).await.unwrap_or_default();
         report.risk_flags.extend(oracle_flags);
+
+        // Blockhash freshness: can this transaction still land?
+        if let Ok((current_height, last_valid_height)) = simulator::get_latest_blockhash(rpc_url).await
+            && let Some(flag) =
+                simulator::blockhash_flag(simulator::blockhash_freshness(current_height, last_valid_height))
+        {
+            report.risk_flags.push(flag);
+        }
     }
 
     let crossref_flags = sim_crossref::cross_reference(&mut report);
@@ -211,6 +280,8 @@ async fn main() -> Result<()> {
 
     // Annotate token amounts (checked variants resolve offline; unchecked need RPC)
     simulator::resolve_token_amounts(cli.rpc.as_deref(), &mut report).await;
+
+    types::dedup_risk_flags(&mut report.risk_flags);
 
     if let Some(ref output_path) = cli.output_tx_report {
         let program_name = schema
@@ -224,18 +295,42 @@ async fn main() -> Result<()> {
         std::fs::write(output_path, report_json).context("Failed to write tx-report output")?;
     }
 
+    if let Some(ref output_path) = cli.output_html {
+        std::fs::write(output_path, html_report::render_html(&report)).context("Failed to write HTML report")?;
+    }
+
     if cli.json {
         println!("{}", ui::render_json(&report));
     } else {
-        ui::render_terminal(&report, use_network);
+        ui::render_terminal_with_known(&report, use_network, known_addresses.as_ref());
     }
 
-    std::process::exit(i32::from(worst_severity_exit_code(&report)));
+    std::process::exit(i32::from(worst_severity_exit_code(&report, min_severity)));
 }
 
-fn worst_severity_exit_code(report: &TransactionReport) -> u8 {
+fn parse_fail_on(level: Option<&str>) -> RiskSeverity {
+    match level {
+        Some("warning") => RiskSeverity::Warning,
+        Some("critical") => RiskSeverity::Critical,
+        _ => RiskSeverity::Info,
+    }
+}
+
+fn severity_rank(severity: &RiskSeverity) -> u8 {
+    match severity {
+        RiskSeverity::Critical => 2,
+        RiskSeverity::Warning => 1,
+        RiskSeverity::Info => 0,
+    }
+}
+
+fn worst_severity_exit_code(report: &TransactionReport, min_severity: RiskSeverity) -> u8 {
+    let min_rank = severity_rank(&min_severity);
     let mut worst = 0;
     for flag in &report.risk_flags {
+        if severity_rank(&flag.severity) < min_rank {
+            continue;
+        }
         let code = match flag.severity {
             RiskSeverity::Critical => 2,
             RiskSeverity::Warning | RiskSeverity::Info => 1,
@@ -288,22 +383,34 @@ mod tests {
 
     #[test]
     fn empty_flags_exit_zero() {
-        assert_eq!(worst_severity_exit_code(&report_with_flags(&[])), 0);
+        assert_eq!(worst_severity_exit_code(&report_with_flags(&[]), RiskSeverity::Info), 0);
     }
 
     #[test]
     fn info_flag_exit_one() {
-        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Info])), 1);
+        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Info]), RiskSeverity::Info), 1);
     }
 
     #[test]
     fn warning_flag_exit_one() {
-        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Warning])), 1);
+        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Warning]), RiskSeverity::Info), 1);
     }
 
     #[test]
     fn critical_flag_exit_two() {
-        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Critical])), 2);
+        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Critical]), RiskSeverity::Info), 2);
+    }
+
+    #[test]
+    fn fail_on_warning_ignores_info_flags() {
+        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Info]), RiskSeverity::Warning), 0);
+        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Warning]), RiskSeverity::Warning), 1);
+    }
+
+    #[test]
+    fn fail_on_critical_ignores_warnings() {
+        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Warning]), RiskSeverity::Critical), 0);
+        assert_eq!(worst_severity_exit_code(&report_with_flags(&[RiskSeverity::Critical]), RiskSeverity::Critical), 2);
     }
 
     #[test]

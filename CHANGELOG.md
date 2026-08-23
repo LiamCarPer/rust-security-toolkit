@@ -40,6 +40,18 @@ All notable changes to this project are documented in this file.
   (i128 math, sign-aware human amounts, ALT-loaded key resolution); shown on
   the dashboard and in JSON for --signature fetches
 - **CPI-aware corpus refresh**: the attack-corpus fetch classifies on the
+- **Stake/Vote decoding**: instruction data for the Stake and Vote programs
+  (all variants incl. checked/seeded) with positional roles
+- **PDA arg-seed verification**: tier-2 Anchor checks now resolve `arg` seeds
+  from decoded arguments (u8/u16/u32/u64/i64 LE, string, bool, publicKey);
+  unresolvable seeds skip silently instead of warning
+- **Batch mode**: --batch NDJSON input with JSONL or summary output and
+  aggregate worst-case exit code
+- **Known-address registry**: --known-addresses names pubkeys on the dashboard
+- **Blockhash freshness**: getLatestBlockhash-driven Expired/Expiring flags
+- **--fail-on severity gating**, **--output-html single-file reports**,
+  **schema_version on --json exports**, global risk-flag dedup, and
+  taiki-e/install-action CI speedup
   flattened top-level + inner view (real CPI-shaped attack txs are now
   discoverable) and captures up to 2 failed transactions per refresh with
   the compact error recorded in the manifest

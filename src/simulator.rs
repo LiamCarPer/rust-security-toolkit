@@ -193,6 +193,99 @@ struct RpcGetTransactionResponse {
     error: Option<RpcError>,
 }
 
+#[derive(Serialize)]
+struct RpcGetLatestBlockhashRequest {
+    jsonrpc: String,
+    id: u32,
+    method: String,
+    params: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcGetLatestBlockhashResponse {
+    result: Option<RpcBlockhashResult>,
+    error: Option<RpcError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcBlockhashResult {
+    value: Option<RpcBlockhashValue>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RpcBlockhashValue {
+    block_height: u64,
+    last_valid_block_height: u64,
+}
+
+/// Returns `(current block height, last valid block height)` for the
+/// latest epoch blockhash; a transaction is landable while the chain
+/// height stays at or below the last valid height.
+pub async fn get_latest_blockhash(rpc_url: &str) -> Result<(u64, u64)> {
+    let client = reqwest::Client::new();
+    let request = RpcGetLatestBlockhashRequest {
+        jsonrpc: "2.0".to_string(),
+        id: 1,
+        method: "getLatestBlockhash".to_string(),
+        params: vec![],
+    };
+    let response = client
+        .post(rpc_url)
+        .json(&request)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .context("Failed to send getLatestBlockhash RPC request")?;
+    let body: RpcGetLatestBlockhashResponse =
+        response.json().await.context("Failed to parse getLatestBlockhash RPC response")?;
+    if let Some(err) = body.error {
+        anyhow::bail!("RPC error: {}", err.message);
+    }
+    let value =
+        body.result.and_then(|r| r.value).ok_or_else(|| anyhow::anyhow!("getLatestBlockhash returned no result"))?;
+    Ok((value.block_height, value.last_valid_block_height))
+}
+
+pub enum BlockhashStatus {
+    Expired,
+    Expiring(u64),
+    Fresh,
+}
+
+pub fn blockhash_freshness(current_block_height: u64, last_valid_block_height: u64) -> BlockhashStatus {
+    if current_block_height > last_valid_block_height {
+        BlockhashStatus::Expired
+    } else if current_block_height >= last_valid_block_height.saturating_sub(50) {
+        BlockhashStatus::Expiring(last_valid_block_height - current_block_height)
+    } else {
+        BlockhashStatus::Fresh
+    }
+}
+
+pub fn blockhash_flag(status: BlockhashStatus) -> Option<crate::types::RiskFlag> {
+    use crate::types::{RiskCategory, RiskSeverity};
+    match status {
+        BlockhashStatus::Fresh => None,
+        BlockhashStatus::Expired => Some(crate::types::RiskFlag {
+            severity: RiskSeverity::Warning,
+            category: RiskCategory::BlockhashExpired,
+            instruction_index: None,
+            message: "Transaction blockhash expired".to_string(),
+            details: "The recent blockhash is older than the last valid block height reported by the RPC                       endpoint; the transaction would be rejected as expired if submitted now."
+                .to_string(),
+        }),
+        BlockhashStatus::Expiring(remaining) => Some(crate::types::RiskFlag {
+            severity: RiskSeverity::Info,
+            category: RiskCategory::BlockhashExpired,
+            instruction_index: None,
+            message: format!("Transaction blockhash expiring ({} blocks remaining)", remaining),
+            details: "The recent blockhash will stop being accepted after the reported number of blocks;                       submit promptly or refresh the blockhash."
+                .to_string(),
+        }),
+    }
+}
+
 pub async fn fetch_transaction_with_meta(rpc_url: &str, signature: &str) -> Result<(Vec<u8>, Option<FetchedTxMeta>)> {
     let client = reqwest::Client::new();
 

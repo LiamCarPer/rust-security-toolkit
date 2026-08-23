@@ -232,7 +232,14 @@ fn detect_approve_then_transfer(report: &TransactionReport, severity: RiskSeveri
 }
 
 fn detect_nonsigner_transfer_authority(report: &TransactionReport, severity: RiskSeverity, flags: &mut Vec<RiskFlag>) {
+    // Top-level only: an inner (CPI) transfer is authorized by the invoking
+    // program holding the authority, so a non-signing authority there is the
+    // norm; at the top level it means funds moved on someone else's say-so.
     for ix in all_instructions(report) {
+        let is_top = matches!(ix, AnyInstructionRef::Top(_));
+        if !is_top {
+            continue;
+        }
         let Some(name) = ix_instruction_name(&ix) else { continue };
         let (role, pos) = match (ix_program_id(&ix), name) {
             (pid, "Transfer") if is_token_program(pid) => ("authority", 2),

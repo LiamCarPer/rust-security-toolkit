@@ -32,10 +32,8 @@ use crate::types::{RiskCategory, RiskFlag, RiskSeverity, TransactionReport};
 const PYTH_MAGIC: u32 = 0xa1b2_c3d4;
 
 /// Pyth program owners (price accounts are program-owned).
-const PYTH_PROGRAM_IDS: &[&str] = &[
-    "FsJ3A3u2uj5F1XkmMZ5pW8rcKjmr2M9nZ3cXaFvTvM4A",
-    "pythWSnswVUd12oZpeFP8e9CVaEqJgTgSjRTOqmjBu",
-];
+const PYTH_PROGRAM_IDS: &[&str] =
+    &["FsJ3A3u2uj5F1XkmMZ5pW8rcKjmr2M9nZ3cXaFvTvM4A", "pythWSnswVUd12oZpeFP8e9CVaEqJgTgSjRTOqmjBu"];
 
 /// Staleness window: a publish time farther than this from the client clock
 /// (either direction) is definitely unusable. Finer bounds need block time,
@@ -129,7 +127,8 @@ pub async fn fetch_pyth_feeds(rpc_url: &str, report: &TransactionReport) -> Vec<
             let data = match data_cache.get(&account.pubkey) {
                 Some(d) => d.clone(),
                 None => {
-                    let fetched = simulator::fetch_account_data(&client, rpc_url, &account.pubkey).await.unwrap_or(None);
+                    let fetched =
+                        simulator::fetch_account_data(&client, rpc_url, &account.pubkey).await.unwrap_or(None);
                     data_cache.insert(account.pubkey.clone(), fetched.clone());
                     fetched
                 }
@@ -155,10 +154,8 @@ pub async fn fetch_pyth_feeds(rpc_url: &str, report: &TransactionReport) -> Vec<
 ///   shape (values compared/combined at different scales).
 pub fn check_feeds(report: &TransactionReport, feeds: &[DecodedFeed]) -> Vec<RiskFlag> {
     let mut flags = Vec::new();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let now =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
 
     for feed in feeds {
         if feed.price.conf > 0

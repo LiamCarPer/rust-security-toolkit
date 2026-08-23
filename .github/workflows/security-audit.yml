@@ -31,16 +31,22 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       # cargo-deny is the gating check: it fails the job on real issues
       # (licenses, advisories, banned crates) via deny.toml.
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - name: cargo-deny
-        run: |
-          cargo install cargo-deny --locked
-          cargo deny check
+        run: cargo deny check
       # cargo-geiger only reports unsafe-usage counts and is informational.
       # It requires a nightly toolchain to build, so the workflow installs
       # nightly and never lets this step block the pipeline.
+      - name: Install cargo-geiger
+        uses: taiki-e/install-action@v2
+        continue-on-error: true
+        with:
+          tool: cargo-geiger
       - name: cargo-geiger
         continue-on-error: true
         run: |
           rustup toolchain install nightly --profile minimal
-          cargo +nightly install cargo-geiger --locked || cargo +nightly install cargo-geiger
           cargo +nightly geiger

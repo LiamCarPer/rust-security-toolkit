@@ -59,6 +59,27 @@ pub struct OracleFeed {
     pub publish_time: Option<i64>,
 }
 
+/// Remove duplicate risk flags in place, keyed by
+/// `(category, instruction_index, message)`; first occurrence wins and the
+/// original order is preserved.
+pub fn dedup_risk_flags(flags: &mut Vec<RiskFlag>) {
+    let mut i = 0;
+    while i < flags.len() {
+        let mut j = i + 1;
+        while j < flags.len() {
+            let same = flags[i].category == flags[j].category
+                && flags[i].instruction_index == flags[j].instruction_index
+                && flags[i].message == flags[j].message;
+            if same {
+                flags.remove(j);
+            } else {
+                j += 1;
+            }
+        }
+        i += 1;
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignatureCheck {
     pub index: u8,
@@ -343,7 +364,8 @@ pub enum RiskCategory {
     OracleConfidenceTooWide,
     /// One instruction references oracle feeds with different exponents —
     /// values at different decimal scales silently miscompare/miscombine.
-    OracleDecimalsMismatch,    /// The transaction's recent blockhash is expired or close to expiring
+    OracleDecimalsMismatch,
+    /// The transaction's recent blockhash is expired or close to expiring
     /// relative to the RPC-reported block height.
     BlockhashExpired,
 }
@@ -622,5 +644,59 @@ mod tests {
         assert_eq!(pda.seeds, vec!["escrow".to_string()]);
         assert_eq!(pda.dynamic_seed_count, 1);
         assert!(doc.find_instruction("nope").is_none());
+    }
+
+    #[test]
+    fn dedup_removes_duplicate_keyed_flags() {
+        let mut flags =
+            vec![flag(RiskCategory::MissingSigner, Some(0), "m"), flag(RiskCategory::MissingSigner, Some(0), "m")];
+        dedup_risk_flags(&mut flags);
+        assert_eq!(flags.len(), 1);
+    }
+
+    #[test]
+    fn dedup_keeps_same_category_and_index_different_message() {
+        let mut flags =
+            vec![flag(RiskCategory::MissingSigner, Some(0), "a"), flag(RiskCategory::MissingSigner, Some(0), "b")];
+        dedup_risk_flags(&mut flags);
+        assert_eq!(flags.len(), 2);
+    }
+
+    #[test]
+    fn dedup_keeps_different_category_same_message() {
+        let mut flags =
+            vec![flag(RiskCategory::MissingSigner, None, "m"), flag(RiskCategory::InsecureWritable, None, "m")];
+        dedup_risk_flags(&mut flags);
+        assert_eq!(flags.len(), 2);
+    }
+
+    #[test]
+    fn dedup_preserves_first_occurrence_order() {
+        let mut flags = vec![
+            flag(RiskCategory::InsecureWritable, None, "first"),
+            flag(RiskCategory::MissingSigner, None, "mid"),
+            flag(RiskCategory::InsecureWritable, None, "first"),
+        ];
+        dedup_risk_flags(&mut flags);
+        assert_eq!(flags.len(), 2);
+        assert_eq!(flags[0].message, "first");
+        assert_eq!(flags[1].message, "mid");
+    }
+
+    #[test]
+    fn dedup_empty_vec_unchanged() {
+        let mut flags: Vec<RiskFlag> = Vec::new();
+        dedup_risk_flags(&mut flags);
+        assert!(flags.is_empty());
+    }
+
+    fn flag(category: RiskCategory, index: Option<u8>, message: &str) -> RiskFlag {
+        RiskFlag {
+            severity: RiskSeverity::Warning,
+            category,
+            instruction_index: index,
+            message: message.to_string(),
+            details: String::new(),
+        }
     }
 }

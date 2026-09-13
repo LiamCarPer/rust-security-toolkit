@@ -359,6 +359,7 @@ fn empty_meta() -> FetchedTxMeta {
         post_balances: Vec::new(),
         pre_token_balances: Vec::new(),
         post_token_balances: Vec::new(),
+        logs: Vec::new(),
     }
 }
 
@@ -392,6 +393,7 @@ fn build_fetched_meta(inner_groups: &[UiInnerInstructions], loaded: Option<&UiLo
         post_balances: Vec::new(),
         pre_token_balances: Vec::new(),
         post_token_balances: Vec::new(),
+        logs: Vec::new(),
     }
 }
 

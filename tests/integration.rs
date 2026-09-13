@@ -158,6 +158,8 @@ fn make_report() -> TransactionReport {
         token_balance_changes: vec![],
         oracle_feeds: Vec::new(),
         idl_source: None,
+        logs: vec![],
+        events: vec![],
     }
 }
 
@@ -295,6 +297,7 @@ fn test_missing_signer_with_idl() {
         }],
         accounts: vec![],
         types: vec![],
+        events: vec![],
     };
 
     let mut report = make_report();
@@ -337,6 +340,7 @@ fn test_signer_present_not_flagged() {
         }],
         accounts: vec![],
         types: vec![],
+        events: vec![],
     };
 
     let mut report = make_report();
@@ -414,6 +418,8 @@ fn make_report_with_data() -> TransactionReport {
         token_balance_changes: vec![],
         oracle_feeds: Vec::new(),
         idl_source: None,
+        logs: vec![],
+        events: vec![],
     }
 }
 
@@ -538,6 +544,7 @@ fn test_tx_report_sat_contract() {
         }],
         accounts: vec![],
         types: vec![],
+        events: vec![],
     };
 
     let schema = ProgramSchema::Idl(idl);
@@ -591,6 +598,7 @@ fn test_idl_find_instruction() {
         ],
         accounts: vec![],
         types: vec![],
+        events: vec![],
     };
     assert!(idl.find_instruction("foo").is_some());
     assert!(idl.find_instruction("bar").is_some());
@@ -881,6 +889,7 @@ fn make_single_account_idl() -> IdlJson {
         }],
         accounts: vec![],
         types: vec![],
+        events: vec![],
     }
 }
 

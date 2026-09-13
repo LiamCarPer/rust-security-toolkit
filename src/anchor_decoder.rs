@@ -38,7 +38,7 @@ pub fn decode_anchor_args(data: &[u8], args: &[IdlArg]) -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
-fn decode_anchor_type(data: &[u8], offset: usize, ty: &serde_json::Value) -> (serde_json::Value, usize) {
+pub(crate) fn decode_anchor_type(data: &[u8], offset: usize, ty: &serde_json::Value) -> (serde_json::Value, usize) {
     match ty {
         serde_json::Value::String(s) => decode_anchor_scalar(data, offset, s.as_str()),
         serde_json::Value::Object(o) => {

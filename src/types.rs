@@ -48,6 +48,13 @@ pub struct TransactionReport {
     /// "bundled"; None when no schema was applied.
     #[serde(default)]
     pub idl_source: Option<String>,
+    /// Runtime log lines from getTransaction meta and/or simulation.
+    #[serde(default)]
+    pub logs: Vec<String>,
+    /// Decoded Anchor CPI events (`Program data:` lines matched against the
+    /// IDL's event discriminators).
+    #[serde(default)]
+    pub events: Vec<EventRecord>,
 }
 
 /// One decoded oracle price feed referenced by the transaction.
@@ -121,6 +128,8 @@ pub struct FetchedTxMeta {
     pub error: Option<serde_json::Value>,
     #[serde(default)]
     pub units_consumed: Option<u64>,
+    #[serde(default)]
+    pub logs: Vec<String>,
     #[serde(default)]
     pub pre_balances: Vec<u64>,
     #[serde(default)]
@@ -411,6 +420,34 @@ pub struct IdlJson {
     pub accounts: Vec<IdlAccountDef>,
     #[serde(default)]
     pub types: Vec<IdlTypeDef>,
+    #[serde(default)]
+    pub events: Vec<IdlEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdlEvent {
+    pub name: String,
+    #[serde(default)]
+    pub fields: Vec<IdlEventField>,
+    #[serde(default)]
+    pub discriminator: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdlEventField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: serde_json::Value,
+    #[serde(default)]
+    pub index: bool,
+}
+
+/// One decoded `Program data:` CPI event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventRecord {
+    pub name: String,
+    pub program_id: String,
+    pub fields: serde_json::Value,
 }
 
 impl IdlJson {

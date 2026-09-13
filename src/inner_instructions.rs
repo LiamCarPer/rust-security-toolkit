@@ -155,6 +155,8 @@ mod tests {
             token_balance_changes: Vec::new(),
             oracle_feeds: Vec::new(),
             idl_source: None,
+            logs: vec![],
+            events: vec![],
         }
     }
 
@@ -198,6 +200,7 @@ mod tests {
             post_balances: Vec::new(),
             pre_token_balances: Vec::new(),
             post_token_balances: Vec::new(),
+            logs: Vec::new(),
         }
     }
 

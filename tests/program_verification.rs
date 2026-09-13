@@ -34,6 +34,8 @@ fn make_report_with_program(program_id: &str) -> TransactionReport {
         token_balance_changes: vec![],
         oracle_feeds: Vec::new(),
         idl_source: None,
+        logs: vec![],
+        events: vec![],
     }
 }
 

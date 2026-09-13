@@ -287,6 +287,8 @@ fn decode_versioned_tx(tx: VersionedTransaction, schema: Option<&ProgramSchema>)
         token_balance_changes: Vec::new(),
         oracle_feeds: Vec::new(),
         idl_source: None,
+        logs: vec![],
+        events: vec![],
     })
 }
 

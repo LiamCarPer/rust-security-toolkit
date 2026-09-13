@@ -187,6 +187,8 @@ async fn resolve_token_amounts_resolves_inner_checked() {
         token_balance_changes: vec![],
         oracle_feeds: Vec::new(),
         idl_source: None,
+        logs: vec![],
+        events: vec![],
     };
 
     resolve_token_amounts(None, &mut report).await;

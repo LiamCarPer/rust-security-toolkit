@@ -814,6 +814,7 @@ mod tests {
             }],
             accounts: vec![],
             types: vec![],
+            events: vec![],
         };
 
         let mut flags = Vec::new();
@@ -840,6 +841,7 @@ mod tests {
             }],
             accounts: vec![],
             types: vec![],
+            events: vec![],
         };
 
         let report = TransactionReport {
@@ -876,6 +878,8 @@ mod tests {
             token_balance_changes: vec![],
             oracle_feeds: Vec::new(),
             idl_source: None,
+            logs: vec![],
+            events: vec![],
         };
 
         let mut flags = Vec::new();
@@ -912,6 +916,8 @@ mod tests {
             token_balance_changes: vec![],
             oracle_feeds: Vec::new(),
             idl_source: None,
+            logs: vec![],
+            events: vec![],
         };
 
         let mut flags = Vec::new();
@@ -957,6 +963,8 @@ mod tests {
             token_balance_changes: vec![],
             oracle_feeds: Vec::new(),
             idl_source: None,
+            logs: vec![],
+            events: vec![],
         };
 
         validate(&mut report, None);
@@ -1051,6 +1059,8 @@ mod tests {
             token_balance_changes: vec![],
             oracle_feeds: Vec::new(),
             idl_source: None,
+            logs: vec![],
+            events: vec![],
         }
     }
 
@@ -1242,6 +1252,7 @@ mod tests {
             }],
             accounts: vec![],
             types: vec![],
+            events: vec![],
         }
     }
 
@@ -1287,6 +1298,8 @@ mod tests {
             token_balance_changes: vec![],
             oracle_feeds: vec![],
             idl_source: None,
+            logs: vec![],
+            events: vec![],
         }
     }
 

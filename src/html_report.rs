@@ -179,6 +179,8 @@ mod tests {
             token_balance_changes: vec![],
             oracle_feeds: vec![],
             idl_source: None,
+            logs: vec![],
+            events: vec![],
         };
         let html = render_html(&report);
         assert!(html.contains("Accounts"));
@@ -207,6 +209,8 @@ mod tests {
             token_balance_changes: vec![],
             oracle_feeds: vec![],
             idl_source: None,
+            logs: vec![],
+            events: vec![],
         };
         report.warnings.push(String::from("&<>"));
         let html = render_html(&report);
@@ -236,6 +240,8 @@ mod tests {
             token_balance_changes: vec![],
             oracle_feeds: vec![],
             idl_source: None,
+            logs: vec![],
+            events: vec![],
         };
         let _ = render_html(&report);
     }
@@ -262,6 +268,8 @@ mod tests {
             token_balance_changes: vec![],
             oracle_feeds: vec![],
             idl_source: None,
+            logs: vec![],
+            events: vec![],
         };
         for severity in [RiskSeverity::Critical, RiskSeverity::Warning, RiskSeverity::Info] {
             report.risk_flags.push(RiskFlag {

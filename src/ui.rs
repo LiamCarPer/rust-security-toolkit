@@ -4,7 +4,7 @@ use crate::known_addresses::KnownAddresses;
 use crate::types::{RiskSeverity, TransactionReport};
 
 fn display_key(key: &str, known: Option<&KnownAddresses>) -> String {
-    match known.and_then(|k| k.name(key)) {
+    match known.and_then(|k| k.name(key)).or_else(|| crate::labels::label(key)) {
         Some(name) => format!("{} ({})", name, truncate_key(key)),
         None => truncate_key(key),
     }
@@ -130,13 +130,27 @@ pub fn render_terminal_with_known(
         println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
     }
 
-    // ── Instructions Breakdown ──────────────────────────────────────────────
+    // ── Instructions Breakdown (CPI tree) ───────────────────────────────────
     println!();
     println!("{}", "┌── Instructions Breakdown ──────────────────────────────────────────────────────┐".bold());
+    let failed_index = report.simulation.as_ref().and_then(|s| s.error_instruction_index);
+    let failed_code = report.simulation.as_ref().and_then(|s| s.error_code.as_deref());
     for ix in &report.instructions {
         let name = ix.instruction_name.as_deref().unwrap_or(&ix.program_name);
-        println!("│ [Instruction #{}] {}: {}", ix.index, ix.program_name.bold(), name.cyan());
+        let failed = failed_index == Some(ix.index);
+        let marker = if failed {
+            format!(" ← FAILED{}", failed_code.map(|c| format!(": {}", c)).unwrap_or_default()).red().bold()
+        } else {
+            "".normal()
+        };
+        println!("│ [Instruction #{}] {}: {}{}", ix.index, ix.program_name.bold(), name.cyan(), marker);
         println!("│   ├── Program: {}", ix.program_id.dimmed());
+
+        if let Some(ref sim) = report.simulation
+            && let Some(cu) = sim.instruction_cu.iter().find(|cu| cu.instruction_index == ix.index)
+        {
+            println!("│   ├── CU Consumed: {} (limit {})", cu.units_consumed, cu.cu_limit);
+        }
 
         for account in &ix.accounts {
             let label = account.name.as_deref().unwrap_or("account");
@@ -157,6 +171,29 @@ pub fn render_terminal_with_known(
                 account.account_index,
                 missing
             );
+        }
+
+        for inner in report.inner_instructions.iter().filter(|i| i.parent_instruction_index == ix.index) {
+            let inner_name = inner.instruction_name.as_deref().unwrap_or(&inner.program_name);
+            println!("│   ├── CPI [{}] {}: {}", inner.inner_index, inner.program_name.dimmed(), inner_name.cyan());
+            for account in &inner.accounts {
+                let label = account.name.as_deref().unwrap_or("account");
+                println!(
+                    "│   │   ├── {:<12}: {:<15} (Account #{})",
+                    format!("{}:", label),
+                    display_key(&account.pubkey, known),
+                    account.account_index
+                );
+            }
+            if inner.data != serde_json::Value::Null {
+                let data_str = serde_json::to_string(&inner.data).unwrap_or_else(|_| inner.raw_data_hex.clone());
+                println!("│   │   └── Data: {}", data_str.dimmed());
+            } else if !inner.raw_data_hex.is_empty() {
+                println!("│   │   └── Raw Data: {}", inner.raw_data_hex.dimmed());
+            }
+            if let Some(ta) = &inner.token_amount {
+                println!("│   │   └── Token Amount: {} (raw {}, {} decimals)", ta.human, ta.raw, ta.decimals);
+            }
         }
 
         if ix.data != serde_json::Value::Null {
@@ -180,37 +217,13 @@ pub fn render_terminal_with_known(
     }
     println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
 
-    // ── Inner Instructions (CPI, from RPC meta) ─────────────────────────────
-    if !report.inner_instructions.is_empty() {
+    // ── Decoded Events (Anchor `Program data:`) ─────────────────────────────
+    if !report.events.is_empty() {
         println!();
-        println!("{}", "┌── Inner Instructions (CPI, from RPC meta) ───────────────────────────────────────┐".bold());
-        for inner in &report.inner_instructions {
-            let name = inner.instruction_name.as_deref().unwrap_or(&inner.program_name);
-            println!(
-                "│ Instruction #{} (inner #{}): {}",
-                inner.parent_instruction_index,
-                inner.inner_index,
-                name.cyan()
-            );
-            println!("│   ├── Program: {}", inner.program_id.dimmed());
-            for account in &inner.accounts {
-                let label = account.name.as_deref().unwrap_or("account");
-                println!(
-                    "│   │   ├── {:<12}: {:<15} (Account #{})",
-                    format!("{}:", label),
-                    truncate_key(&account.pubkey),
-                    account.account_index
-                );
-            }
-            if inner.data != serde_json::Value::Null {
-                let data_str = serde_json::to_string(&inner.data).unwrap_or_else(|_| inner.raw_data_hex.clone());
-                println!("│   └── Mapped Data: {}", data_str.dimmed());
-            } else if !inner.raw_data_hex.is_empty() {
-                println!("│   └── Raw Data: {}", inner.raw_data_hex.dimmed());
-            }
-            if let Some(ta) = &inner.token_amount {
-                println!("│   └── Token Amount: {} (raw {}, {} decimals)", ta.human, ta.raw, ta.decimals);
-            }
+        println!("{}", "┌── Decoded Events ───────────────────────────────────────────────────────────────┐".bold());
+        for event in &report.events {
+            let fields = serde_json::to_string(&event.fields).unwrap_or_default();
+            println!("│ {} [{}] {}", event.name.cyan().bold(), truncate_key(&event.program_id), fields.dimmed());
         }
         println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
     }
@@ -346,6 +359,14 @@ pub fn render_tx_report(report: &TransactionReport, program_name: &str) -> Strin
     let sat_report = serde_json::json!({
         "schema_version": "1.0",
         "program_name": program_name,
+        "idl_source": report.idl_source,
+        "events": report.events.iter().map(|e| {
+            serde_json::json!({
+                "name": e.name,
+                "program_id": e.program_id,
+                "fields": e.fields,
+            })
+        }).collect::<Vec<_>>(),
         "transaction": {
             "signatures": report.signatures,
             "fee_payer": report.fee_payer,

@@ -37,6 +37,15 @@ All notable changes to this project are documented in this file.
 - **getTransaction fetch fix**: mainnet returns result as an object with
 - **Balance-change analysis** (src/balance_changes.rs): meta pre/postBalances
 - **On-chain IDL auto-fetch**: --idl-auto [PROGRAM_ID] fetches Anchor IDLs
+- **Anchor event decoding**: Program data CPI events decoded against IDL event
+  discriminators (explicit spec discriminators or computed event:Name hash),
+  attributed to the emitting program via the invoke stack, raw payload retained
+  when the IDL omits field definitions
+- **Multi-program IDL auto-fetch**: --idl-auto now fetches IDLs for all non-builtin
+  programs in the transaction and names their top-level and CPI instructions
+- **CPI call tree dashboard**: inner instructions nested per parent with CU,
+  failure markers and simulation error codes; bundled mint labels (USDC, wSOL,
+  JitoSOL, ...) merged under --known-addresses precedence
   from chain (legacy anchor:idl derived account and the modern
   Program-Metadata-Program spec incl. zlib/gzip compression and base58/utf8
   encodings), re-decodes and re-validates with full tier-1/tier-2 checks, and

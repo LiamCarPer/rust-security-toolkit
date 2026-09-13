@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use rust_security_toolkit::types::{ExpectationsDoc, IdlJson, ProgramSchema, RiskSeverity, TransactionReport};
 use rust_security_toolkit::{
-    balance_changes, batch, decoder, html_report, idl_fetch, inner_instructions, known_addresses, oracle, patterns,
-    signature_verify, sim_crossref, simulator, types, ui, validator,
+    balance_changes, batch, decoder, event_decoder, html_report, idl_fetch, inner_instructions, instruction_decoder,
+    known_addresses, oracle, patterns, signature_verify, sim_crossref, simulator, types, ui, validator,
 };
 
 #[derive(Parser)]
@@ -209,29 +209,69 @@ async fn main() -> Result<()> {
 
     // --idl-auto: fetch the target program's IDL from chain and re-decode with
     // full validation enabled. Only runs when no explicit schema was supplied.
+    // --idl-auto: fetch on-chain IDLs for the target program(s) and re-decode
+    // with full validation enabled. Only runs when no explicit schema exists.
     if cli.idl_auto.is_some()
         && schema.is_none()
         && let Some(rpc_url) = cli.rpc.clone()
     {
-        let requested = cli.idl_auto.as_deref().filter(|s| !s.is_empty()).map(String::from);
-        match resolve_auto_target(&report, requested.as_deref()) {
-            Some(program_id) => match idl_fetch::fetch_idl(&rpc_url, &program_id).await {
-                Ok(Some(idl)) => {
-                    let fetched_schema = ProgramSchema::Idl(idl);
-                    match decoder::decode_input(&input_bytes, Some(&fetched_schema)) {
-                        Ok((_, fresh)) => {
-                            report = fresh;
-                            schema = Some(fetched_schema);
-                            report.idl_source = Some("on-chain".to_string());
+        let requested = cli.idl_auto.as_deref().filter(|s| !s.is_empty());
+        let targets = collect_auto_targets(&report, requested);
+        if targets.is_empty() {
+            report.warnings.push("IDL auto-fetch: no non-builtin program found to fetch an IDL for".to_string());
+        }
+        let mut fetched: Vec<(String, types::IdlJson)> = Vec::new();
+        for program_id in &targets {
+            match idl_fetch::fetch_idl(&rpc_url, program_id).await {
+                Ok(Some(idl)) => fetched.push((program_id.to_string(), idl)),
+                Ok(None) => report.warnings.push(format!("IDL auto-fetch: no on-chain IDL found for {}", program_id)),
+                Err(e) => report.warnings.push(format!("IDL auto-fetch failed for {}: {}", program_id, e)),
+            }
+        }
+        if let Some((_primary_program, primary_idl)) = fetched.first().cloned() {
+            let primary_schema = ProgramSchema::Idl(primary_idl);
+            match decoder::decode_input(&input_bytes, Some(&primary_schema)) {
+                Ok((_, fresh)) => {
+                    report = fresh;
+                    report.idl_source = Some("on-chain".to_string());
+                }
+                Err(e) => report.warnings.push(format!("IDL auto-fetch re-decode failed: {}", e)),
+            }
+            schema = Some(primary_schema);
+            for (program_id, idl) in fetched.iter().skip(1) {
+                let secondary = ProgramSchema::Idl(idl.clone());
+                let mut named = 0usize;
+                for ix in report.instructions.iter_mut() {
+                    if &ix.program_id != program_id || ix.instruction_name.is_some() {
+                        continue;
+                    }
+                    if let Ok(bytes) = hex::decode(&ix.raw_data_hex) {
+                        let (name, data) =
+                            instruction_decoder::decode_instruction_data(&ix.program_id, &bytes, Some(&secondary));
+                        if name.is_some() {
+                            ix.instruction_name = name;
+                            ix.data = data;
+                            named += 1;
                         }
-                        Err(e) => report.warnings.push(format!("IDL auto-fetch re-decode failed: {}", e)),
                     }
                 }
-                Ok(None) => report.warnings.push(format!("IDL auto-fetch: no on-chain IDL found for {}", program_id)),
-                Err(e) => report.warnings.push(format!("IDL auto-fetch failed: {}", e)),
-            },
-            None => {
-                report.warnings.push("IDL auto-fetch: no non-builtin program found to fetch an IDL for".to_string())
+                for inner in report.inner_instructions.iter_mut() {
+                    if &inner.program_id != program_id || inner.instruction_name.is_some() {
+                        continue;
+                    }
+                    if let Ok(bytes) = hex::decode(&inner.raw_data_hex) {
+                        let (name, data) =
+                            instruction_decoder::decode_instruction_data(&inner.program_id, &bytes, Some(&secondary));
+                        if name.is_some() {
+                            inner.instruction_name = name;
+                            inner.data = data;
+                            named += 1;
+                        }
+                    }
+                }
+                if named > 0 {
+                    report.warnings.push(format!("IDL auto-fetch: named {} instruction(s) for {}", named, program_id));
+                }
             }
         }
     }
@@ -243,6 +283,9 @@ async fn main() -> Result<()> {
     validator::validate(&mut report, schema.as_ref());
 
     if let Some(meta) = fetched_meta {
+        if !meta.logs.is_empty() {
+            report.logs = meta.logs.clone();
+        }
         let warnings = inner_instructions::annotate_report(&mut report, meta.clone());
         report.warnings.extend(warnings);
         let warnings = balance_changes::annotate_report(&mut report, meta);
@@ -293,6 +336,9 @@ async fn main() -> Result<()> {
 
         match simulator::simulate_transaction(rpc_url, &tx_base64).await {
             Ok(sim_result) => {
+                if report.logs.is_empty() {
+                    report.logs = sim_result.logs.clone();
+                }
                 report.simulation = Some(sim_result);
             }
             Err(e) => {
@@ -327,6 +373,10 @@ async fn main() -> Result<()> {
     // Annotate token amounts (checked variants resolve offline; unchecked need RPC)
     simulator::resolve_token_amounts(cli.rpc.as_deref(), &mut report).await;
 
+    if let Some(ProgramSchema::Idl(idl)) = schema.as_ref() {
+        event_decoder::decode_events(&mut report, idl);
+    }
+
     types::dedup_risk_flags(&mut report.risk_flags);
 
     if let Some(ref output_path) = cli.output_tx_report {
@@ -354,7 +404,7 @@ async fn main() -> Result<()> {
     std::process::exit(i32::from(worst_severity_exit_code(&report, min_severity)));
 }
 
-fn resolve_auto_target(report: &TransactionReport, requested: Option<&str>) -> Option<solana_sdk::pubkey::Pubkey> {
+fn collect_auto_targets(report: &TransactionReport, requested: Option<&str>) -> Vec<solana_sdk::pubkey::Pubkey> {
     use std::str::FromStr;
     const BUILTIN: &[&str] = &[
         rust_security_toolkit::types::SYSTEM_PROGRAM_ID,
@@ -366,15 +416,17 @@ fn resolve_auto_target(report: &TransactionReport, requested: Option<&str>) -> O
         rust_security_toolkit::types::STAKE_PROGRAM_ID,
         rust_security_toolkit::types::VOTE_PROGRAM_ID,
     ];
+    const MAX_TARGETS: usize = 8;
     if let Some(id) = requested.filter(|s| !s.is_empty()) {
-        return solana_sdk::pubkey::Pubkey::from_str(id).ok();
+        return solana_sdk::pubkey::Pubkey::from_str(id).ok().into_iter().collect();
     }
-    report
-        .instructions
-        .iter()
-        .map(|ix| ix.program_id.as_str())
-        .find(|pid| !BUILTIN.contains(pid))
-        .and_then(|p| solana_sdk::pubkey::Pubkey::from_str(p).ok())
+    let mut seen: Vec<&str> = Vec::new();
+    for pid in report.instructions.iter().map(|ix| ix.program_id.as_str()) {
+        if !BUILTIN.contains(&pid) && !seen.contains(&pid) {
+            seen.push(pid);
+        }
+    }
+    seen.iter().take(MAX_TARGETS).filter_map(|p| solana_sdk::pubkey::Pubkey::from_str(p).ok()).collect()
 }
 
 fn parse_fail_on(level: Option<&str>) -> RiskSeverity {
@@ -448,6 +500,8 @@ mod tests {
             token_balance_changes: Vec::new(),
             oracle_feeds: Vec::new(),
             idl_source: None,
+            logs: vec![],
+            events: vec![],
         }
     }
 

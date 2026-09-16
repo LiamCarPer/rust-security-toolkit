@@ -4,7 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-17
+
 ### Added
+- **Submission-grade outputs**: --output-sarif (SARIF 2.1.0 for GitHub
+  code scanning / CI gating) and --output-markdown (bounty-report format
+  with per-finding sections and evidence blocks from balance changes,
+  events, and signature checks); schemas/report.schema.json documents
+  the JSON report shape (schema_version 1.0)
+- **Fuzz campaigns executed**: all five libFuzzer targets ran clean
+  (~14.2M executions, zero crashes); stale signature_verify target fixed
 - **Per-instruction CU attribution**: the simulation cross-reference parses
   Program X consumed N of M compute units log lines into a per-instruction CU
   table (new SimulationResult.instruction_cu), shown on the dashboard; flags

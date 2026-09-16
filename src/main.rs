@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use rust_security_toolkit::types::{ExpectationsDoc, IdlJson, ProgramSchema, RiskSeverity, TransactionReport};
 use rust_security_toolkit::{
     balance_changes, batch, decoder, event_decoder, html_report, idl_fetch, inner_instructions, instruction_decoder,
-    known_addresses, oracle, patterns, signature_verify, sim_crossref, simulator, types, ui, validator,
+    known_addresses, markdown_report, oracle, patterns, sarif, signature_verify, sim_crossref, simulator, types, ui,
+    validator,
 };
 
 #[derive(Parser)]
@@ -93,6 +94,14 @@ struct Cli {
     /// Write a single-file HTML report
     #[arg(long = "output-html", value_name = "PATH")]
     output_html: Option<PathBuf>,
+
+    /// Write a SARIF 2.1.0 report (GitHub code scanning compatible)
+    #[arg(long = "output-sarif", value_name = "PATH")]
+    output_sarif: Option<PathBuf>,
+
+    /// Write a Markdown report (bounty-submission ready)
+    #[arg(long = "output-markdown", value_name = "PATH")]
+    output_markdown: Option<PathBuf>,
 
     /// Run internal byte-level parser alongside solana-sdk and flag any structural disagreements
     #[arg(long = "validate-decoding")]
@@ -393,6 +402,15 @@ async fn main() -> Result<()> {
 
     if let Some(ref output_path) = cli.output_html {
         std::fs::write(output_path, html_report::render_html(&report)).context("Failed to write HTML report")?;
+    }
+
+    if let Some(ref output_path) = cli.output_sarif {
+        std::fs::write(output_path, sarif::render_sarif(&report)).context("Failed to write SARIF report")?;
+    }
+
+    if let Some(ref output_path) = cli.output_markdown {
+        std::fs::write(output_path, markdown_report::render_markdown(&report))
+            .context("Failed to write Markdown report")?;
     }
 
     if cli.json {

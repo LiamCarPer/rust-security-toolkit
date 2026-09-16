@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/LiamCarPer/rust-security-toolkit/schemas/report.schema.json",
+  "title": "rts transaction report (--json, schema_version 1.0)",
+  "type": "object",
+  "required": ["schema_version", "status", "fee_payer", "risk_flags"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "status": { "type": "string" },
+    "fee_payer": { "type": "string" },
+    "signatures": { "type": "array", "items": { "type": "string" } },
+    "recent_blockhash": { "type": "string" },
+    "message_version": { "type": ["integer", "null"] },
+    "idl_source": { "type": ["string", "null"], "enum": ["file", "on-chain", "bundled", null] },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "pubkey", "is_signer", "is_writable"],
+        "properties": {
+          "index": { "type": "integer" },
+          "pubkey": { "type": "string" },
+          "is_signer": { "type": "boolean" },
+          "is_writable": { "type": "boolean" },
+          "role": { "type": ["string", "null"] },
+          "pda_info": { "type": ["object", "null"] }
+        }
+      }
+    },
+    "instructions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "program_id", "program_name"],
+        "properties": {
+          "index": { "type": "integer" },
+          "program_id": { "type": "string" },
+          "program_name": { "type": "string" },
+          "instruction_name": { "type": ["string", "null"] },
+          "accounts": { "type": "array" },
+          "data": {},
+          "raw_data_hex": { "type": "string" },
+          "token_amount": { "type": ["object", "null"] }
+        }
+      }
+    },
+    "inner_instructions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["inner_index", "parent_instruction_index", "program_id"],
+        "properties": {
+          "inner_index": { "type": "integer" },
+          "parent_instruction_index": { "type": "integer" },
+          "program_id": { "type": "string" },
+          "program_name": { "type": "string" },
+          "instruction_name": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "risk_flags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "category", "message", "details"],
+        "properties": {
+          "severity": { "enum": ["Critical", "Warning", "Info"] },
+          "category": { "type": "string" },
+          "instruction_index": { "type": ["integer", "null"] },
+          "message": { "type": "string" },
+          "details": { "type": "string" }
+        }
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "program_id", "fields"],
+        "properties": {
+          "name": { "type": "string" },
+          "program_id": { "type": "string" },
+          "fields": {}
+        }
+      }
+    },
+    "logs": { "type": "array", "items": { "type": "string" } },
+    "balance_changes_sol": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["account_index", "pubkey", "pre", "post", "delta"],
+        "properties": {
+          "account_index": { "type": "integer" },
+          "pubkey": { "type": "string" },
+          "pre": { "type": "integer" },
+          "post": { "type": "integer" },
+          "delta": { "type": "integer" }
+        }
+      }
+    },
+    "token_balance_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["account_index", "pubkey", "mint", "delta_raw", "delta_human"],
+        "properties": {
+          "account_index": { "type": "integer" },
+          "pubkey": { "type": "string" },
+          "mint": { "type": "string" },
+          "delta_raw": { "type": "integer" },
+          "delta_human": { "type": "string" }
+        }
+      }
+    },
+    "signature_verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "pubkey", "verified", "note"],
+        "properties": {
+          "index": { "type": "integer" },
+          "pubkey": { "type": "string" },
+          "verified": { "type": "boolean" },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "simulation": { "type": ["object", "null"] },
+    "oracle_feeds": { "type": "array" },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  }
+}

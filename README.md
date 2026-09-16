@@ -103,6 +103,12 @@ rts <tx_bytes>
 rts --json <tx_bytes>
 
 # sat-compatible execution report
+
+# SARIF 2.1.0 (GitHub code scanning / CI gating)
+rts --output-sarif findings.sarif <tx_bytes>
+
+# Markdown bounty report (findings with evidence blocks)
+rts --output-markdown report.md <tx_bytes>
 rts --output-tx-report report.json <tx_bytes>
 ```
 

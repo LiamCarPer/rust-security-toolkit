@@ -7,3 +7,4 @@ fuzz/target/
 *~
 .DS_Store
 .notes/fuzz/corpus/
+.notes/

@@ -2932,6 +2932,7 @@ dependencies = [
  "bs58",
  "clap",
  "colored",
+ "flate2",
  "hex",
  "reqwest",
  "serde",

@@ -24,6 +24,13 @@ fuzz_target!(|data: &[u8]| {
         simulation: None,
         warnings: Vec::new(),
         signature_verification: checks,
+        inner_instructions: Vec::new(),
+        balance_changes_sol: Vec::new(),
+        token_balance_changes: Vec::new(),
+        oracle_feeds: Vec::new(),
+        idl_source: None,
+        logs: Vec::new(),
+        events: Vec::new(),
     };
     let _ = verify_report(&mut report);
 });

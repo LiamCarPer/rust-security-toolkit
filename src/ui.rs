@@ -370,6 +370,18 @@ pub fn render_json(report: &TransactionReport) -> String {
     serde_json::to_string_pretty(&value).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
 }
 
+/// Render the JSON report with an optional replay section merged in.
+pub fn render_json_with_replay(report: &TransactionReport, replay: Option<&crate::replay_svm::ReplayReport>) -> String {
+    let mut value = serde_json::to_value(report).unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("schema_version".to_string(), serde_json::json!("1.0"));
+        if let Some(replay) = replay {
+            obj.insert("replay".to_string(), serde_json::to_value(replay).unwrap_or(serde_json::Value::Null));
+        }
+    }
+    serde_json::to_string_pretty(&value).unwrap_or_else(|e| format!("{{\"error\": \"{}\"}}", e))
+}
+
 /// Render a terminal batch summary: one line per transaction with its exit code.
 pub fn render_batch_summary(entries: &[(usize, String, u8)]) {
     println!();

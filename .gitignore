@@ -8,3 +8,4 @@ fuzz/target/
 .DS_Store
 fuzz/corpus/
 .notes/
+replay/target/

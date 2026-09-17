@@ -1,0 +1,27 @@
+name: Replay Companion
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'replay/**'
+      - '.github/workflows/replay.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'replay/**'
+      - '.github/workflows/replay.yml'
+  workflow_dispatch: {}
+
+jobs:
+  replay:
+    name: Build and test rts-replay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: replay
+      - name: Test
+        run: cargo test --manifest-path replay/Cargo.toml --locked

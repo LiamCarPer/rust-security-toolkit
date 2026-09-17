@@ -17,6 +17,7 @@ pub mod labels;
 pub mod markdown_report;
 pub mod oracle;
 pub mod patterns;
+pub mod poc;
 pub mod sarif;
 pub mod signature_verify;
 pub mod sim_crossref;

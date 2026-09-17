@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use rust_security_toolkit::types::{ExpectationsDoc, IdlJson, ProgramSchema, RiskSeverity, TransactionReport};
 use rust_security_toolkit::{
     balance_changes, batch, bytecode, decoder, event_decoder, html_report, idl_fetch, inner_instructions,
-    instruction_decoder, known_addresses, markdown_report, oracle, patterns, sarif, signature_verify, sim_crossref,
-    simulator, types, ui, validator,
+    instruction_decoder, known_addresses, markdown_report, oracle, patterns, poc, sarif, signature_verify,
+    sim_crossref, simulator, types, ui, validator,
 };
 
 #[derive(Parser)]
@@ -103,6 +103,26 @@ struct Cli {
     #[arg(long = "output-markdown", value_name = "PATH")]
     output_markdown: Option<PathBuf>,
 
+    /// Write a mutable PoC template for the analyzed transaction
+    #[arg(long = "poc-template", value_name = "PATH")]
+    poc_template: Option<PathBuf>,
+
+    /// Replay a PoC template: rebuild, mutate, and simulate (never sends)
+    #[arg(long = "poc-run", value_name = "TEMPLATE", conflicts_with_all = ["tx_input", "file", "signature", "batch"])]
+    poc_run: Option<PathBuf>,
+
+    /// Mutate an account key on replay (repeatable): INDEX=PUBKEY
+    #[arg(long = "mutate-account", value_name = "INDEX=PUBKEY")]
+    mutate_account: Vec<String>,
+
+    /// Replace instruction data on replay (repeatable): IX=HEX
+    #[arg(long = "mutate-data", value_name = "IX=HEX")]
+    mutate_data: Vec<String>,
+
+    /// Replace a transfer amount on replay (repeatable): IX=U64
+    #[arg(long = "mutate-amount", value_name = "IX=U64")]
+    mutate_amount: Vec<String>,
+
     /// Disassemble the target program's on-chain bytecode with sol-azy
     /// (fallback for IDL-less / closed-source programs)
     #[arg(long = "disassemble", value_name = "PROGRAM_ID", num_args = 0..=1, default_missing_value = "", requires = "rpc")]
@@ -122,6 +142,65 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let min_severity = parse_fail_on(cli.fail_on.as_deref());
     let min_severity_for_batch = min_severity.clone();
+
+    if let Some(ref template_path) = cli.poc_run {
+        let contents = std::fs::read_to_string(template_path).context("Failed to read PoC template")?;
+        let mut template: poc::PocTemplate =
+            serde_json::from_str(&contents).context("Failed to parse PoC template JSON")?;
+        for mutation in &cli.mutate_account {
+            let (index, pubkey) = split_mutation(mutation, "INDEX=PUBKEY")?;
+            let index: usize = index.parse().context("mutate-account index must be a number")?;
+            template.set_account_key(index, pubkey).context("mutate-account failed")?;
+        }
+        for mutation in &cli.mutate_data {
+            let (index, data) = split_mutation(mutation, "IX=HEX")?;
+            let index: usize = index.parse().context("mutate-data index must be a number")?;
+            template.set_instruction_data(index, data).context("mutate-data failed")?;
+        }
+        for mutation in &cli.mutate_amount {
+            let (index, amount) = split_mutation(mutation, "IX=U64")?;
+            let index: usize = index.parse().context("mutate-amount index must be a number")?;
+            let amount: u64 = amount.parse().context("mutate-amount value must be a u64")?;
+            template.set_instruction_amount(index, amount).context("mutate-amount failed")?;
+        }
+        let tx = poc::to_transaction(&template).context("Failed to rebuild transaction from template")?;
+        let bytes = bincode::serialize(&tx).context("Failed to serialize rebuilt transaction")?;
+        let (raw, mut report) = decoder::decode_input(&bytes, None)?;
+        validator::validate(&mut report, None);
+        let pattern_flags = patterns::detect_patterns(&report);
+        report.risk_flags.extend(pattern_flags);
+
+        let use_network = !cli.no_network && cli.rpc.is_some();
+        if use_network && let Some(ref rpc_url) = cli.rpc {
+            let tx_base64 = {
+                use base64::Engine;
+                use base64::engine::general_purpose::STANDARD as B64;
+                B64.encode(&raw)
+            };
+            match simulator::simulate_transaction(rpc_url, &tx_base64).await {
+                Ok(sim_result) => {
+                    if report.logs.is_empty() {
+                        report.logs = sim_result.logs.clone();
+                    }
+                    report.simulation = Some(sim_result);
+                }
+                Err(e) => report.warnings.push(format!("Simulation failed: {}", e)),
+            }
+        }
+        let crossref_flags = sim_crossref::cross_reference(&mut report);
+        report.risk_flags.extend(crossref_flags);
+        types::dedup_risk_flags(&mut report.risk_flags);
+        report
+            .warnings
+            .push("PoC replay: template signatures are placeholders; signature verification skipped".to_string());
+
+        if cli.json {
+            println!("{}", ui::render_json(&report));
+        } else {
+            ui::render_terminal_with_known(&report, use_network, None);
+        }
+        std::process::exit(i32::from(worst_severity_exit_code(&report, min_severity.clone())));
+    }
 
     if let Some(ref batch_path) = cli.batch {
         let contents = std::fs::read_to_string(batch_path).context("Failed to read batch file")?;
@@ -452,6 +531,14 @@ async fn main() -> Result<()> {
             .context("Failed to write Markdown report")?;
     }
 
+    if let Some(ref output_path) = cli.poc_template {
+        let tx = bincode::deserialize::<solana_sdk::transaction::VersionedTransaction>(&raw_bytes_decoded)
+            .context("Failed to deserialize transaction for template extraction")?;
+        let template = poc::from_transaction(&tx);
+        let template_json = serde_json::to_string_pretty(&template).context("Failed to serialize PoC template")?;
+        std::fs::write(output_path, template_json).context("Failed to write PoC template")?;
+    }
+
     if cli.json {
         println!("{}", ui::render_json(&report));
     } else {
@@ -484,6 +571,10 @@ fn collect_auto_targets(report: &TransactionReport, requested: Option<&str>) -> 
         }
     }
     seen.iter().take(MAX_TARGETS).filter_map(|p| solana_sdk::pubkey::Pubkey::from_str(p).ok()).collect()
+}
+
+fn split_mutation<'a>(mutation: &'a str, expected: &str) -> Result<(&'a str, &'a str)> {
+    mutation.split_once('=').ok_or_else(|| anyhow::anyhow!("expected {} but got {:?}", expected, mutation))
 }
 
 fn parse_fail_on(level: Option<&str>) -> RiskSeverity {

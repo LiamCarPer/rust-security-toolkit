@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Mutation/replay harness (PoC)**: --poc-template extracts a mutable transaction
+  template with byte-identical round-trip fidelity (verified for legacy and
+  v0-with-ALT messages); --poc-run rebuilds the transaction, applies mutations
+  (--mutate-account, --mutate-data, --mutate-amount), decodes it offline, and
+  simulates it via RPC with placeholder signatures and a replaced blockhash
+  (sigVerify disabled) — strictly simulate-only, never sends
+
+### Added
 - **Bytecode fallback for IDL-less programs**: `--disassemble [PROGRAM_ID]`
   (and automatic fallback inside `--idl-auto`) fetches the program ELF from chain and runs
   sol-azy to produce a syscall inventory, decoded rodata strings, ELF SHA-256, upgrade

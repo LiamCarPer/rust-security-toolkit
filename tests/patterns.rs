@@ -61,6 +61,7 @@ fn report(instructions: Vec<DecodedInstruction>) -> TransactionReport {
         idl_source: None,
         logs: vec![],
         events: vec![],
+        program_analyses: Vec::new(),
     }
 }
 

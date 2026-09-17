@@ -275,6 +275,41 @@ pub fn render_terminal_with_known(
         println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
     }
 
+    // ── Program Analysis (bytecode fallback) ────────────────────────────────
+    if !report.program_analyses.is_empty() {
+        println!();
+        println!("{}", "┌── Program Analysis (bytecode, sol-azy) ──────────────────────────────────────────┐".bold());
+        for analysis in &report.program_analyses {
+            let sha = analysis.elf_sha256.get(..12).unwrap_or(&analysis.elf_sha256);
+            println!(
+                "│ {} ({} loader, {} bytes, sha256 {}…)",
+                display_key(&analysis.program_id, known),
+                analysis.loader,
+                analysis.elf_size,
+                sha
+            );
+            if let Some(ref authority) = analysis.upgrade_authority {
+                println!("│   ├── Upgrade authority: {}", display_key(authority, known));
+            }
+            if !analysis.syscalls.is_empty() {
+                println!("│   ├── Syscalls: {}", analysis.syscalls.join(", ").dimmed());
+            }
+            if !analysis.strings.is_empty() {
+                println!("│   ├── Strings: {}", analysis.strings.join(" | ").dimmed());
+            }
+            if !analysis.dispatch_candidates.is_empty() {
+                println!(
+                    "│   ├── Dispatch candidates (heuristic): {}",
+                    analysis.dispatch_candidates.join(", ").yellow()
+                );
+            }
+            if let Some(ref dir) = analysis.artifact_dir {
+                println!("│   └── Artifacts: {}", dir.dimmed());
+            }
+        }
+        println!("{}", "└────────────────────────────────────────────────────────────────────────────────┘".bold());
+    }
+
     // ── Structural Risk Flags ───────────────────────────────────────────────
     if !report.risk_flags.is_empty() {
         println!();

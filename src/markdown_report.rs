@@ -110,6 +110,38 @@ pub fn render_markdown(report: &TransactionReport) -> String {
         out.push('\n');
     }
 
+    if !report.program_analyses.is_empty() {
+        out.push_str("## Appendix — Bytecode Analysis (sol-azy)\n\n");
+        for analysis in &report.program_analyses {
+            out.push_str(&format!(
+                "### `{}`\n\n- loader: {}\n- size: {} bytes\n- sha256: `{}`\n",
+                cell(&analysis.program_id),
+                analysis.loader,
+                analysis.elf_size,
+                cell(&analysis.elf_sha256)
+            ));
+            if let Some(ref authority) = analysis.upgrade_authority {
+                out.push_str(&format!("- upgrade authority: `{}`\n", cell(authority)));
+            }
+            if !analysis.syscalls.is_empty() {
+                out.push_str(&format!("- syscalls: {}\n", analysis.syscalls.join(", ")));
+            }
+            if !analysis.dispatch_candidates.is_empty() {
+                out.push_str(&format!(
+                    "- dispatch candidates (heuristic): {}\n",
+                    analysis.dispatch_candidates.join(", ")
+                ));
+            }
+            if !analysis.strings.is_empty() {
+                out.push_str("- strings:\n");
+                for string in &analysis.strings {
+                    out.push_str(&format!("  - `{}`\n", cell(string)));
+                }
+            }
+            out.push('\n');
+        }
+    }
+
     if !report.warnings.is_empty() {
         out.push_str("## Appendix — Decoder Warnings\n\n");
         for warning in &report.warnings {
@@ -148,6 +180,7 @@ mod tests {
             idl_source: None,
             logs: Vec::new(),
             events: Vec::new(),
+            program_analyses: Vec::new(),
         }
     }
 

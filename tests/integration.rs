@@ -160,6 +160,7 @@ fn make_report() -> TransactionReport {
         idl_source: None,
         logs: vec![],
         events: vec![],
+        program_analyses: Vec::new(),
     }
 }
 
@@ -420,6 +421,7 @@ fn make_report_with_data() -> TransactionReport {
         idl_source: None,
         logs: vec![],
         events: vec![],
+        program_analyses: Vec::new(),
     }
 }
 

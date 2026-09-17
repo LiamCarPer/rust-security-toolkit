@@ -139,6 +139,7 @@ mod tests {
             idl_source: None,
             logs,
             events: Vec::new(),
+            program_analyses: Vec::new(),
         }
     }
 

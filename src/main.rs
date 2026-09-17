@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 use rust_security_toolkit::types::{ExpectationsDoc, IdlJson, ProgramSchema, RiskSeverity, TransactionReport};
 use rust_security_toolkit::{
-    balance_changes, batch, decoder, event_decoder, html_report, idl_fetch, inner_instructions, instruction_decoder,
-    known_addresses, markdown_report, oracle, patterns, sarif, signature_verify, sim_crossref, simulator, types, ui,
-    validator,
+    balance_changes, batch, bytecode, decoder, event_decoder, html_report, idl_fetch, inner_instructions,
+    instruction_decoder, known_addresses, markdown_report, oracle, patterns, sarif, signature_verify, sim_crossref,
+    simulator, types, ui, validator,
 };
 
 #[derive(Parser)]
@@ -102,6 +102,15 @@ struct Cli {
     /// Write a Markdown report (bounty-submission ready)
     #[arg(long = "output-markdown", value_name = "PATH")]
     output_markdown: Option<PathBuf>,
+
+    /// Disassemble the target program's on-chain bytecode with sol-azy
+    /// (fallback for IDL-less / closed-source programs)
+    #[arg(long = "disassemble", value_name = "PROGRAM_ID", num_args = 0..=1, default_missing_value = "", requires = "rpc")]
+    disassemble: Option<String>,
+
+    /// Persist sol-azy disassembly artifacts under this directory
+    #[arg(long = "output-disassembly", value_name = "DIR")]
+    output_disassembly: Option<PathBuf>,
 
     /// Run internal byte-level parser alongside solana-sdk and flag any structural disagreements
     #[arg(long = "validate-decoding")]
@@ -220,6 +229,7 @@ async fn main() -> Result<()> {
     // full validation enabled. Only runs when no explicit schema was supplied.
     // --idl-auto: fetch on-chain IDLs for the target program(s) and re-decode
     // with full validation enabled. Only runs when no explicit schema exists.
+    let mut idl_fetched_programs: Vec<String> = Vec::new();
     if cli.idl_auto.is_some()
         && schema.is_none()
         && let Some(rpc_url) = cli.rpc.clone()
@@ -232,7 +242,10 @@ async fn main() -> Result<()> {
         let mut fetched: Vec<(String, types::IdlJson)> = Vec::new();
         for program_id in &targets {
             match idl_fetch::fetch_idl(&rpc_url, program_id).await {
-                Ok(Some(idl)) => fetched.push((program_id.to_string(), idl)),
+                Ok(Some(idl)) => {
+                    idl_fetched_programs.push(program_id.to_string());
+                    fetched.push((program_id.to_string(), idl));
+                }
                 Ok(None) => report.warnings.push(format!("IDL auto-fetch: no on-chain IDL found for {}", program_id)),
                 Err(e) => report.warnings.push(format!("IDL auto-fetch failed for {}: {}", program_id, e)),
             }
@@ -287,6 +300,22 @@ async fn main() -> Result<()> {
 
     if schema.is_some() && report.idl_source.is_none() && cli.idl.is_some() {
         report.idl_source = Some("file".to_string());
+    }
+
+    // Bytecode fallback targets: explicit --disassemble wins; otherwise, with
+    // --idl-auto, every target whose IDL could not be found on chain.
+    let mut bytecode_targets: Vec<solana_sdk::pubkey::Pubkey> = Vec::new();
+    if let Some(ref requested_disassemble) = cli.disassemble {
+        let requested = Some(requested_disassemble.as_str()).filter(|s| !s.is_empty());
+        bytecode_targets = collect_auto_targets(&report, requested);
+    } else if cli.idl_auto.is_some() {
+        let requested = cli.idl_auto.as_deref().filter(|s| !s.is_empty());
+        for target in collect_auto_targets(&report, requested) {
+            let id = target.to_string();
+            if !idl_fetched_programs.contains(&id) {
+                bytecode_targets.push(target);
+            }
+        }
     }
 
     validator::validate(&mut report, schema.as_ref());
@@ -373,6 +402,16 @@ async fn main() -> Result<()> {
                 simulator::blockhash_flag(simulator::blockhash_freshness(current_height, last_valid_height))
         {
             report.risk_flags.push(flag);
+        }
+
+        // Bytecode fallback: disassemble IDL-less programs with sol-azy.
+        if !bytecode_targets.is_empty() {
+            let options = bytecode::AnalyzeOptions {
+                binary: bytecode::sol_azy_binary(),
+                artifact_dir: cli.output_disassembly.clone(),
+            };
+            let warnings = bytecode::analyze_programs(rpc_url, &mut report, &bytecode_targets, &options).await;
+            report.warnings.extend(warnings);
         }
     }
 
@@ -520,6 +559,7 @@ mod tests {
             idl_source: None,
             logs: vec![],
             events: vec![],
+            program_analyses: Vec::new(),
         }
     }
 

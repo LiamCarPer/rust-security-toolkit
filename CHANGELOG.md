@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Bytecode fallback for IDL-less programs**: `--disassemble [PROGRAM_ID]`
+  (and automatic fallback inside `--idl-auto`) fetches the program ELF from chain and runs
+  sol-azy to produce a syscall inventory, decoded rodata strings, ELF SHA-256, upgrade
+  authority, and heuristic dispatch-discriminator candidates that rename unknown
+  instructions as `dispatch:0x...`; `--output-disassembly DIR` persists artifacts. Analysis
+  is enrichment only (no risk flags) and degrades gracefully when sol-azy is absent.
+
 ## [0.2.0] - 2026-09-17
 
 ### Added

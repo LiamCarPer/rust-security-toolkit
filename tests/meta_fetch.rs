@@ -189,6 +189,7 @@ async fn resolve_token_amounts_resolves_inner_checked() {
         idl_source: None,
         logs: vec![],
         events: vec![],
+        program_analyses: Vec::new(),
     };
 
     resolve_token_amounts(None, &mut report).await;

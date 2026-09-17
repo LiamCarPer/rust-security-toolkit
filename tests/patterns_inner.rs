@@ -80,6 +80,7 @@ fn report(instructions: Vec<DecodedInstruction>, inner_instructions: Vec<InnerIn
         idl_source: None,
         logs: vec![],
         events: vec![],
+        program_analyses: Vec::new(),
     }
 }
 

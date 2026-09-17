@@ -6,5 +6,5 @@ fuzz/target/
 *.swo
 *~
 .DS_Store
-.notes/fuzz/corpus/
+fuzz/corpus/
 .notes/

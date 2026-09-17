@@ -2,6 +2,7 @@ pub mod account_roles;
 pub mod anchor_decoder;
 pub mod balance_changes;
 pub mod batch;
+pub mod bytecode;
 pub mod decoder;
 pub mod encoding;
 pub mod event_decoder;

@@ -880,6 +880,7 @@ mod tests {
             idl_source: None,
             logs: vec![],
             events: vec![],
+            program_analyses: Vec::new(),
         };
 
         let mut flags = Vec::new();
@@ -918,6 +919,7 @@ mod tests {
             idl_source: None,
             logs: vec![],
             events: vec![],
+            program_analyses: Vec::new(),
         };
 
         let mut flags = Vec::new();
@@ -965,6 +967,7 @@ mod tests {
             idl_source: None,
             logs: vec![],
             events: vec![],
+            program_analyses: Vec::new(),
         };
 
         validate(&mut report, None);
@@ -1061,6 +1064,7 @@ mod tests {
             idl_source: None,
             logs: vec![],
             events: vec![],
+            program_analyses: Vec::new(),
         }
     }
 
@@ -1300,6 +1304,7 @@ mod tests {
             idl_source: None,
             logs: vec![],
             events: vec![],
+            program_analyses: Vec::new(),
         }
     }
 

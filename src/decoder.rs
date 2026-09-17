@@ -289,6 +289,7 @@ fn decode_versioned_tx(tx: VersionedTransaction, schema: Option<&ProgramSchema>)
         idl_source: None,
         logs: vec![],
         events: vec![],
+        program_analyses: Vec::new(),
     })
 }
 

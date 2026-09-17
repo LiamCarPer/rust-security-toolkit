@@ -181,6 +181,7 @@ mod tests {
             idl_source: None,
             logs: vec![],
             events: vec![],
+            program_analyses: Vec::new(),
         };
         let html = render_html(&report);
         assert!(html.contains("Accounts"));
@@ -211,6 +212,7 @@ mod tests {
             idl_source: None,
             logs: vec![],
             events: vec![],
+            program_analyses: Vec::new(),
         };
         report.warnings.push(String::from("&<>"));
         let html = render_html(&report);
@@ -242,6 +244,7 @@ mod tests {
             idl_source: None,
             logs: vec![],
             events: vec![],
+            program_analyses: Vec::new(),
         };
         let _ = render_html(&report);
     }
@@ -270,6 +273,7 @@ mod tests {
             idl_source: None,
             logs: vec![],
             events: vec![],
+            program_analyses: Vec::new(),
         };
         for severity in [RiskSeverity::Critical, RiskSeverity::Warning, RiskSeverity::Info] {
             report.risk_flags.push(RiskFlag {

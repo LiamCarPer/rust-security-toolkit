@@ -55,6 +55,9 @@ pub struct TransactionReport {
     /// IDL's event discriminators).
     #[serde(default)]
     pub events: Vec<EventRecord>,
+    /// Bytecode analyses for IDL-less programs (sol-azy disassembly fallback).
+    #[serde(default)]
+    pub program_analyses: Vec<ProgramAnalysis>,
 }
 
 /// One decoded oracle price feed referenced by the transaction.
@@ -448,6 +451,33 @@ pub struct EventRecord {
     pub name: String,
     pub program_id: String,
     pub fields: serde_json::Value,
+}
+
+/// Bytecode-level analysis of one program (sol-azy disassembly fallback for
+/// IDL-less / closed-source programs). Enrichment only — never risk flags.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgramAnalysis {
+    pub program_id: String,
+    /// "upgradeable" | "deprecated" | "unknown"
+    pub loader: String,
+    pub elf_size: usize,
+    pub elf_sha256: String,
+    #[serde(default)]
+    pub upgrade_authority: Option<String>,
+    #[serde(default)]
+    pub syscalls: Vec<String>,
+    #[serde(default)]
+    pub strings: Vec<String>,
+    /// 8-byte `lddw` immediates that match an unknown instruction's data
+    /// prefix, rendered as hex (candidate dispatch discriminators).
+    #[serde(default)]
+    pub dispatch_candidates: Vec<String>,
+    /// Instruction indexes renamed via a candidate match.
+    #[serde(default)]
+    pub matched_instructions: Vec<u8>,
+    /// Directory with the raw disassembly artifacts when persisted.
+    #[serde(default)]
+    pub artifact_dir: Option<String>,
 }
 
 impl IdlJson {

@@ -36,6 +36,7 @@ fn make_report_with_program(program_id: &str) -> TransactionReport {
         idl_source: None,
         logs: vec![],
         events: vec![],
+        program_analyses: Vec::new(),
     }
 }
 

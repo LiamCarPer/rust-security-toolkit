@@ -11,6 +11,11 @@ All notable changes to this project are documented in this file.
   (--mutate-account, --mutate-data, --mutate-amount), decodes it offline, and
   simulates it via RPC with placeholder signatures and a replaced blockhash
   (sigVerify disabled) — strictly simulate-only, never sends
+- **PoC diff and signing**: --poc-diff A.json B.json runs both templates and reports
+  outcome/CU/flag changes (exit 1 when behavior differs); --keypair signs matching
+  signature slots with local Solana keypair files; --mutate-swap IX:A:B swaps account
+  slots. Simulation error codes now also parse string-shaped err values (e.g.
+  "AccountNotFound") that previously reported as null
 
 ### Added
 - **Bytecode fallback for IDL-less programs**: `--disassemble [PROGRAM_ID]`

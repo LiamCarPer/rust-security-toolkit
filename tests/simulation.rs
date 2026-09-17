@@ -204,7 +204,7 @@ fn test_parse_simulation_error_shapes() {
     );
     // Non-object values and unknown shapes
     assert_eq!(parse_simulation_error(&serde_json::Value::Null), (None, None));
-    assert_eq!(parse_simulation_error(&json!("just a string")), (None, None));
+    assert_eq!(parse_simulation_error(&json!("AccountNotFound")), (Some("AccountNotFound".to_string()), None));
     assert_eq!(parse_simulation_error(&json!({"weird": 1})), (Some("weird".to_string()), None));
 }
 

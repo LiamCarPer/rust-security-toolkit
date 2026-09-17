@@ -62,6 +62,9 @@ struct RpcSimulateConfig {
 /// - `{"InsufficientFundsForFee": {}}` → ("InsufficientFundsForFee", None)
 /// - anything else → (None, None)
 pub fn parse_simulation_error(err: &serde_json::Value) -> (Option<String>, Option<u8>) {
+    if let Some(text) = err.as_str() {
+        return (Some(text.to_string()), None);
+    }
     let obj = match err.as_object() {
         Some(o) => o,
         None => return (None, None),
@@ -1171,5 +1174,18 @@ mod tests {
         // Unchecked variant without inline decimals — nothing to resolve offline.
         assert_eq!(resolve_inline_decimals(&ix.data, &mut ix.token_amount), None);
         assert!(ix.token_amount.is_none());
+    }
+    #[test]
+    fn parse_simulation_error_string_shape() {
+        let (code, index) = parse_simulation_error(&serde_json::json!("AccountNotFound"));
+        assert_eq!(code.as_deref(), Some("AccountNotFound"));
+        assert_eq!(index, None);
+    }
+
+    #[test]
+    fn parse_simulation_error_instruction_error_shape() {
+        let (code, index) = parse_simulation_error(&serde_json::json!({"InstructionError": [2, {"Custom": 42}]}));
+        assert_eq!(code.as_deref(), Some("Custom(42)"));
+        assert_eq!(index, Some(2));
     }
 }
